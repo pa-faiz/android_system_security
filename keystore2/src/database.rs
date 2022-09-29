@@ -46,6 +46,7 @@ pub(crate) mod utils;
 mod versioning;
 
 use crate::gc::Gc;
+use crate::globals::get_keymint_dev_by_uuid;
 use crate::impl_metadata; // This is in db_utils.rs
 use crate::key_parameter::{KeyParameter, Tag};
 use crate::metrics_store::log_rkp_error_stats;
@@ -323,7 +324,7 @@ pub static KEYSTORE_UUID: Uuid = Uuid([
     0x41, 0xe3, 0xb9, 0xce, 0x27, 0x58, 0x4e, 0x91, 0xbc, 0xfd, 0xa5, 0x5d, 0x91, 0x85, 0xab, 0x11,
 ]);
 
-static EXPIRATION_BUFFER_MS: i64 = 20000;
+static EXPIRATION_BUFFER_MS: i64 = 12 * 60 * 60 * 1000;
 
 /// Indicates how the sensitive part of this key blob is encrypted.
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -1863,7 +1864,9 @@ impl KeystoreDB {
                 )
                 .context("Failed to assign attestation key")?;
             if result == 0 {
-                log_rkp_error_stats(MetricsRkpError::OUT_OF_KEYS);
+                let (_, hw_info) = get_keymint_dev_by_uuid(km_uuid)
+                    .context("Error in retrieving keymint device by UUID.")?;
+                log_rkp_error_stats(MetricsRkpError::OUT_OF_KEYS, &hw_info.securityLevel);
                 return Err(KsError::Rc(ResponseCode::OUT_OF_KEYS)).context("Out of keys.");
             } else if result > 1 {
                 return Err(KsError::sys())
@@ -2578,7 +2581,7 @@ impl KeystoreDB {
 
                 Ok((key_id, access_key, access_vector))
             }
-            _ => Err(anyhow!(KsError::sys())),
+            _ => Err(anyhow!(KsError::Rc(ResponseCode::INVALID_ARGUMENT))),
         }
     }
 
@@ -2890,33 +2893,33 @@ impl KeystoreDB {
                 "DELETE FROM persistent.keymetadata
                 WHERE keyentryid IN (
                     SELECT id FROM persistent.keyentry
-                    WHERE domain = ? AND namespace = ? AND key_type = ?
+                    WHERE domain = ? AND namespace = ? AND (key_type = ? OR key_type = ?)
                 );",
-                params![domain.0, namespace, KeyType::Client],
+                params![domain.0, namespace, KeyType::Client, KeyType::Attestation],
             )
             .context("Trying to delete keymetadata.")?;
             tx.execute(
                 "DELETE FROM persistent.keyparameter
                 WHERE keyentryid IN (
                     SELECT id FROM persistent.keyentry
-                    WHERE domain = ? AND namespace = ? AND key_type = ?
+                    WHERE domain = ? AND namespace = ? AND (key_type = ? OR key_type = ?)
                 );",
-                params![domain.0, namespace, KeyType::Client],
+                params![domain.0, namespace, KeyType::Client, KeyType::Attestation],
             )
             .context("Trying to delete keyparameters.")?;
             tx.execute(
                 "DELETE FROM persistent.grant
                 WHERE keyentryid IN (
                     SELECT id FROM persistent.keyentry
-                    WHERE domain = ? AND namespace = ? AND key_type = ?
+                    WHERE domain = ? AND namespace = ? AND (key_type = ? OR key_type = ?)
                 );",
-                params![domain.0, namespace, KeyType::Client],
+                params![domain.0, namespace, KeyType::Client, KeyType::Attestation],
             )
             .context("Trying to delete grants.")?;
             tx.execute(
                 "DELETE FROM persistent.keyentry
-                 WHERE domain = ? AND namespace = ? AND key_type = ?;",
-                params![domain.0, namespace, KeyType::Client],
+                 WHERE domain = ? AND namespace = ? AND (key_type = ? OR key_type = ?);",
+                params![domain.0, namespace, KeyType::Client, KeyType::Attestation],
             )
             .context("Trying to delete keyentry.")?;
             Ok(()).need_gc()

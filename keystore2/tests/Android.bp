@@ -1,4 +1,4 @@
-// Copyright 2021, The Android Open Source Project
+// Copyright 2022, The Android Open Source Project
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,31 +21,28 @@ package {
     default_applicable_licenses: ["system_security_license"],
 }
 
-aidl_interface {
-    name: "android.security.dice",
-    srcs: [ "android/security/dice/*.aidl" ],
-    unstable: true,
-    imports: ["android.hardware.security.dice-V1"],
-    backend: {
-         java: {
-            enabled: false,
-            platform_apis: false,
-        },
-        rust: {
-            enabled: true,
-            apex_available: [
-                "//apex_available:platform",
-                "com.android.compos",
-                "com.android.virt",
-            ],
-        },
-        ndk: {
-            enabled: true,
-            apps_enabled: false,
-            apex_available: [
-                "//apex_available:platform",
-                "com.android.compos",
-            ],
-        }
-    },
+rust_test {
+    name: "keystore2_client_tests",
+    defaults: [
+        "keymint_use_latest_hal_aidl_rust",
+        "keystore2_use_latest_aidl_rust",
+    ],
+    srcs: ["keystore2_client_tests.rs"],
+    test_suites: [
+        "general-tests",
+    ],
+    test_config: "AndroidTest.xml",
+
+    rustlibs: [
+        "librustutils",
+        "libkeystore2_test_utils",
+        "libnix",
+        "libanyhow",
+        "libbinder_rs",
+        "liblazy_static",
+        "liblibc",
+        "libserde",
+        "libthiserror",
+    ],
+    require_root: true,
 }
