@@ -50,7 +50,7 @@ if __name__ == '__main__':
       required=True)
   p.add_argument(
       'inputs',
-      nargs='+',
+      nargs='*',
       help='input file for the build manifest')
   args = p.parse_args(sys.argv[1:])
 
@@ -58,7 +58,6 @@ if __name__ == '__main__':
   for f in sorted(args.inputs):
     # f is a full path for now; make it relative so it starts with {mount_point}/
     digest = digests.digests[os.path.relpath(f, args.base_dir)]
-    print(f"{os.path.relpath(f, args.base_dir)}")
     digest.digest = _digest(args.fsverity_path, f)
     digest.hash_alg = HASH_ALGORITHM
 

@@ -20,6 +20,7 @@
 use crate::error::{get_error_code, Error};
 use crate::globals::DB;
 use crate::key_parameter::KeyParameterValue as KsKeyParamValue;
+use crate::ks_err;
 use crate::operation::Outcome;
 use crate::remote_provisioning::get_pool_status;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
@@ -566,9 +567,9 @@ fn pull_attestation_pool_stats() -> Result<Vec<KeystoreAtom>> {
         let expired_by = SystemTime::now()
             .checked_add(Duration::from_secs(60 * 60 * 24 * 3))
             .ok_or(Error::Rc(ResponseCode::SYSTEM_ERROR))
-            .context("In pull_attestation_pool_stats: Failed to compute expired by system time.")?
+            .context(ks_err!("Failed to compute expired by system time."))?
             .duration_since(UNIX_EPOCH)
-            .context("In pull_attestation_pool_stats: Failed to compute expired by duration.")?
+            .context(ks_err!("Failed to compute expired by duration."))?
             .as_millis() as i64;
 
         let result = get_pool_status(expired_by, *sec_level);
@@ -600,8 +601,10 @@ fn pull_attestation_pool_stats() -> Result<Vec<KeystoreAtom>> {
 
 /// Log error events related to Remote Key Provisioning (RKP).
 pub fn log_rkp_error_stats(rkp_error: MetricsRkpError, sec_level: &SecurityLevel) {
-    let rkp_error_stats = KeystoreAtomPayload::RkpErrorStats(
-        RkpErrorStats { rkpError: rkp_error, security_level: process_security_level(*sec_level) });
+    let rkp_error_stats = KeystoreAtomPayload::RkpErrorStats(RkpErrorStats {
+        rkpError: rkp_error,
+        security_level: process_security_level(*sec_level),
+    });
     METRICS_STORE.insert_atom(AtomID::RKP_ERROR_STATS, rkp_error_stats);
 }
 
@@ -649,8 +652,8 @@ pub fn update_keystore_crash_sysprop() {
 /// Read the system property: keystore.crash_count.
 pub fn read_keystore_crash_count() -> Result<i32> {
     rustutils::system_properties::read("keystore.crash_count")
-        .context("In read_keystore_crash_count: Failed read property.")?
-        .context("In read_keystore_crash_count: Property not set.")?
+        .context(ks_err!("Failed read property."))?
+        .context(ks_err!("Property not set."))?
         .parse::<i32>()
         .map_err(std::convert::Into::into)
 }
