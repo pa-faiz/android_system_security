@@ -4890,11 +4890,13 @@ pub mod tests {
         let key_name_enc = SuperKeyType {
             alias: "test_super_key_1",
             algorithm: SuperEncryptionAlgorithm::Aes256Gcm,
+            name: "test_super_key_1",
         };
 
         let key_name_nonenc = SuperKeyType {
             alias: "test_super_key_2",
             algorithm: SuperEncryptionAlgorithm::Aes256Gcm,
+            name: "test_super_key_2",
         };
 
         // Install two super keys.
@@ -5049,7 +5051,6 @@ pub mod tests {
         for storage in increased_storage_types {
             // Verify the expected storage increased.
             let new = db.get_storage_stat(storage).unwrap();
-            let storage = storage;
             let old = &baseline[&storage.0];
             assert!(new.size >= old.size, "{}: {} >= {}", storage.0, new.size, old.size);
             assert!(
