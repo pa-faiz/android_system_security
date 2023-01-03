@@ -63,11 +63,13 @@ impl KeyMintDevice {
     pub const KEY_MINT_V1: i32 = 100;
     /// Version number of KeyMintDevice@V2
     pub const KEY_MINT_V2: i32 = 200;
+    /// Version number of KeyMintDevice@V3
+    pub const KEY_MINT_V3: i32 = 300;
 
     /// Get a [`KeyMintDevice`] for the given [`SecurityLevel`]
     pub fn get(security_level: SecurityLevel) -> Result<KeyMintDevice> {
-        let (km_dev, hw_info, km_uuid) = get_keymint_device(&security_level)
-            .context("In KeyMintDevice::get: get_keymint_device failed")?;
+        let (km_dev, hw_info, km_uuid) =
+            get_keymint_device(&security_level).context(ks_err!("get_keymint_device failed"))?;
 
         Ok(KeyMintDevice {
             km_dev,
@@ -111,12 +113,11 @@ impl KeyMintDevice {
     where
         F: FnOnce(&Strong<dyn IKeyMintDevice>) -> Result<KeyCreationResult, binder::Status>,
     {
-        let creation_result = map_km_error(creator(&self.km_dev))
-            .context("In create_and_store_key: creator failed")?;
+        let creation_result =
+            map_km_error(creator(&self.km_dev)).context(ks_err!("creator failed"))?;
         let key_parameters = key_characteristics_to_internal(creation_result.keyCharacteristics);
 
-        let creation_date =
-            DateTime::now().context("In create_and_store_key: DateTime::now() failed")?;
+        let creation_date = DateTime::now().context(ks_err!("DateTime::now() failed"))?;
 
         let mut key_metadata = KeyMetaData::new();
         key_metadata.add(KeyMetaEntry::CreationDate(creation_date));
@@ -132,7 +133,7 @@ impl KeyMintDevice {
             &key_metadata,
             &self.km_uuid,
         )
-        .context("In create_and_store_key: store_new_key failed")?;
+        .context(ks_err!("store_new_key failed"))?;
         Ok(())
     }
 
@@ -244,7 +245,7 @@ impl KeyMintDevice {
                         .take_key_blob_info()
                         .ok_or(Error::Rc(ResponseCode::KEY_NOT_FOUND))
                         .map(|(key_blob, _)| KeyBlob::NonSensitive(key_blob))
-                        .context("Missing key blob info.")?,
+                        .context(ks_err!("Missing key blob info."))?,
                 ))
             })
             .context(ks_err!("second lookup failed"))
