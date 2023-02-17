@@ -15,7 +15,11 @@
 use nix::unistd::{Gid, Uid};
 use serde::{Deserialize, Serialize};
 
+use openssl::encrypt::Encrypter;
+use openssl::error::ErrorStack;
 use openssl::hash::MessageDigest;
+use openssl::pkey::PKey;
+use openssl::pkey::Public;
 use openssl::rsa::Padding;
 use openssl::sign::Verifier;
 use openssl::x509::X509;
@@ -80,9 +84,33 @@ macro_rules! skip_test_if_no_app_attest_key_feature {
     };
 }
 
-pub fn has_trusty_keymint() -> bool {
+/// Indicate whether the default device is KeyMint (rather than Keymaster).
+pub fn has_default_keymint() -> bool {
     binder::is_declared("android.hardware.security.keymint.IKeyMintDevice/default")
         .expect("Could not check for declared keymint interface")
+}
+
+/// Generate EC key and grant it to the list of users with given access vector.
+/// Returns the list of granted keys `nspace` values in the order of given grantee uids.
+pub fn generate_ec_key_and_grant_to_users(
+    keystore2: &binder::Strong<dyn IKeystoreService>,
+    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    alias: Option<String>,
+    grantee_uids: Vec<i32>,
+    access_vector: i32,
+) -> Result<Vec<i64>, binder::Status> {
+    let key_metadata =
+        key_generations::generate_ec_p256_signing_key(sec_level, Domain::APP, -1, alias, None)?;
+
+    let mut granted_keys = Vec::new();
+
+    for uid in grantee_uids {
+        let granted_key = keystore2.grant(&key_metadata.key, uid, access_vector)?;
+        assert_eq!(granted_key.domain, Domain::GRANT);
+        granted_keys.push(granted_key.nspace);
+    }
+
+    Ok(granted_keys)
 }
 
 /// Generate a EC_P256 key using given domain, namespace and alias.
@@ -98,10 +126,9 @@ pub fn create_signing_operation(
     let keystore2 = get_keystore_service();
     let sec_level = keystore2.getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
 
-    let key_metadata = key_generations::generate_ec_p256_signing_key(
-        &sec_level, domain, nspace, alias, None, None,
-    )
-    .unwrap();
+    let key_metadata =
+        key_generations::generate_ec_p256_signing_key(&sec_level, domain, nspace, alias, None)
+            .unwrap();
 
     sec_level.createOperation(
         &key_metadata.key,
@@ -347,4 +374,46 @@ pub fn delete_app_key(
         alias: Some(alias.to_string()),
         blob: None,
     })
+}
+
+/// Encrypt the secure key with given transport key.
+pub fn encrypt_secure_key(
+    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    secure_key: &[u8],
+    aad: &[u8],
+    nonce: Vec<u8>,
+    mac_len: i32,
+    key: &KeyDescriptor,
+) -> binder::Result<Option<Vec<u8>>> {
+    let op_params = authorizations::AuthSetBuilder::new()
+        .purpose(KeyPurpose::ENCRYPT)
+        .padding_mode(PaddingMode::NONE)
+        .block_mode(BlockMode::GCM)
+        .nonce(nonce)
+        .mac_length(mac_len);
+
+    let op_response = sec_level.createOperation(key, &op_params, false)?;
+
+    let op = op_response.iOperation.unwrap();
+    op.updateAad(aad)?;
+    op.finish(Some(secure_key), None)
+}
+
+/// Encrypt the transport key with given RSA wrapping key.
+pub fn encrypt_transport_key(
+    transport_key: &[u8],
+    pkey: &PKey<Public>,
+) -> Result<Vec<u8>, ErrorStack> {
+    let mut encrypter = Encrypter::new(pkey).unwrap();
+    encrypter.set_rsa_padding(Padding::PKCS1_OAEP).unwrap();
+    encrypter.set_rsa_oaep_md(MessageDigest::sha256()).unwrap();
+    encrypter.set_rsa_mgf1_md(MessageDigest::sha1()).unwrap();
+
+    let input = transport_key.to_vec();
+    let buffer_len = encrypter.encrypt_len(&input).unwrap();
+    let mut encoded = vec![0u8; buffer_len];
+    let encoded_len = encrypter.encrypt(&input, &mut encoded).unwrap();
+    let encoded = &encoded[..encoded_len];
+
+    Ok(encoded.to_vec())
 }

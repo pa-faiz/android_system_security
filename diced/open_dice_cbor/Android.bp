@@ -22,14 +22,12 @@ rust_library {
     srcs: ["lib.rs"],
 
     rustlibs: [
+        "libdiced_open_dice",
         // For ZVec
         "libkeystore2_crypto_rust",
-        "libopen_dice_bcc_bindgen",
         "libopen_dice_cbor_bindgen",
-        "libthiserror",
     ],
     static_libs: [
-        "libopen_dice_bcc",
         "libopen_dice_cbor",
     ],
     vendor_available: true,
@@ -46,14 +44,12 @@ rust_test {
     test_suites: ["general-tests"],
     auto_gen_config: true,
     rustlibs: [
+        "libdiced_open_dice",
         "libdiced_sample_inputs",
         "libkeystore2_crypto_rust",
-        "libopen_dice_bcc_bindgen",
         "libopen_dice_cbor_bindgen",
-        "libthiserror",
     ],
     static_libs: [
-        "libopen_dice_bcc",
         "libopen_dice_cbor",
     ],
 }

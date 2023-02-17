@@ -19,63 +19,31 @@ use android_hardware_security_dice::aidl::android::hardware::security::dice::{
     Mode::Mode as BinderMode,
 };
 use anyhow::{Context, Result};
-use dice::ContextImpl;
-use diced_open_dice_cbor as dice;
+use diced_open_dice as dice;
 use keystore2_crypto::ZVec;
 use std::convert::TryInto;
 
-/// This new type wraps a reference to BinderInputValues and implements the open dice
-/// InputValues trait.
-#[derive(Debug)]
-pub struct InputValues<'a>(&'a BinderInputValues);
-
-impl<'a> From<&'a BinderInputValues> for InputValues<'a> {
-    fn from(input_values: &'a BinderInputValues) -> InputValues<'a> {
-        Self(input_values)
+/// Converts the `InputValues` from the binder to the `InputValues` type in `diced_open_dice` crate.
+pub fn to_dice_input_values(input: &BinderInputValues) -> dice::InputValues {
+    if input.authorityDescriptor.is_some() {
+        unimplemented!("Authority descriptor is not yet implemented in the current library.");
     }
+    dice::InputValues::new(
+        input.codeHash,
+        dice::Config::Descriptor(input.config.desc.as_slice()),
+        input.authorityHash,
+        to_dice_mode(input.mode),
+        input.hidden,
+    )
 }
 
-impl From<&InputValues<'_>> for BinderInputValues {
-    fn from(input_values: &InputValues) -> BinderInputValues {
-        input_values.0.clone()
-    }
-}
-impl From<InputValues<'_>> for BinderInputValues {
-    fn from(input_values: InputValues) -> BinderInputValues {
-        input_values.0.clone()
-    }
-}
-
-impl dice::InputValues for InputValues<'_> {
-    fn code_hash(&self) -> &[u8; dice::HASH_SIZE] {
-        &self.0.codeHash
-    }
-
-    fn config(&self) -> dice::Config {
-        dice::Config::Descriptor(self.0.config.desc.as_slice())
-    }
-
-    fn authority_hash(&self) -> &[u8; dice::HASH_SIZE] {
-        &self.0.authorityHash
-    }
-
-    fn authority_descriptor(&self) -> Option<&[u8]> {
-        self.0.authorityDescriptor.as_deref()
-    }
-
-    fn mode(&self) -> dice::Mode {
-        match self.0.mode {
-            BinderMode::NOT_INITIALIZED => dice::Mode::NotConfigured,
-            BinderMode::NORMAL => dice::Mode::Normal,
-            BinderMode::DEBUG => dice::Mode::Debug,
-            BinderMode::RECOVERY => dice::Mode::Recovery,
-            _ => dice::Mode::NotConfigured,
-        }
-    }
-
-    fn hidden(&self) -> &[u8; dice::HIDDEN_SIZE] {
-        // If `self` was created using try_from the length was checked and this cannot panic.
-        &self.0.hidden
+fn to_dice_mode(binder_mode: BinderMode) -> dice::DiceMode {
+    match binder_mode {
+        BinderMode::NOT_INITIALIZED => dice::DiceMode::kDiceModeNotInitialized,
+        BinderMode::NORMAL => dice::DiceMode::kDiceModeNormal,
+        BinderMode::DEBUG => dice::DiceMode::kDiceModeDebug,
+        BinderMode::RECOVERY => dice::DiceMode::kDiceModeMaintenance,
+        _ => dice::DiceMode::kDiceModeNotInitialized,
     }
 }
 
@@ -97,6 +65,18 @@ pub struct ResidentArtifacts {
     cdi_attest: ZVec,
     cdi_seal: ZVec,
     bcc: Vec<u8>,
+}
+
+impl TryFrom<dice::OwnedDiceArtifacts> for ResidentArtifacts {
+    type Error = anyhow::Error;
+
+    fn try_from(dice_artifacts: dice::OwnedDiceArtifacts) -> Result<Self, Self::Error> {
+        Ok(ResidentArtifacts {
+            cdi_attest: dice_artifacts.cdi_values.cdi_attest[..].try_into()?,
+            cdi_seal: dice_artifacts.cdi_values.cdi_seal[..].try_into()?,
+            bcc: dice_artifacts.bcc[..].to_vec(),
+        })
+    }
 }
 
 impl ResidentArtifacts {
@@ -153,33 +133,32 @@ impl ResidentArtifacts {
         (cdi_attest, cdi_seal, bcc)
     }
 
-    fn execute_step(self, input_values: &dyn dice::InputValues) -> Result<Self> {
+    fn execute_step(self, input_values: &BinderInputValues) -> Result<Self> {
         let ResidentArtifacts { cdi_attest, cdi_seal, bcc } = self;
 
-        let (cdi_attest, cdi_seal, bcc) = dice::OpenDiceCborContext::new()
-            .bcc_main_flow(
-                cdi_attest[..].try_into().with_context(|| {
-                    format!("Trying to convert cdi_attest. (length: {})", cdi_attest.len())
-                })?,
-                cdi_seal[..].try_into().with_context(|| {
-                    format!("Trying to convert cdi_seal. (length: {})", cdi_seal.len())
-                })?,
-                &bcc,
-                input_values,
-            )
-            .context("In ResidentArtifacts::execute_step:")?;
-        Ok(ResidentArtifacts { cdi_attest, cdi_seal, bcc })
+        dice::retry_bcc_main_flow(
+            cdi_attest[..].try_into().with_context(|| {
+                format!("Trying to convert cdi_attest. (length: {})", cdi_attest.len())
+            })?,
+            cdi_seal[..].try_into().with_context(|| {
+                format!("Trying to convert cdi_seal. (length: {})", cdi_seal.len())
+            })?,
+            &bcc,
+            &to_dice_input_values(input_values),
+        )
+        .context("In ResidentArtifacts::execute_step:")?
+        .try_into()
     }
 
     /// Iterate through the iterator of dice input values performing one
     /// BCC main flow step on each element.
-    pub fn execute_steps<'a, Iter>(self, input_values: Iter) -> Result<Self>
+    pub fn execute_steps<'a, I>(self, input_values: I) -> Result<Self>
     where
-        Iter: IntoIterator<Item = &'a dyn dice::InputValues>,
+        I: IntoIterator<Item = &'a BinderInputValues>,
     {
         input_values
             .into_iter()
-            .try_fold(self, |acc, input_values| acc.execute_step(input_values))
+            .try_fold(self, |acc, input| acc.execute_step(input))
             .context("In ResidentArtifacts::execute_step:")
     }
 }
@@ -256,18 +235,17 @@ pub mod cbor {
     pub fn encode_header(t: u8, n: u64, buffer: &mut dyn Write) -> Result<()> {
         match n {
             n if n < 24 => {
-                let written = buffer
-                    .write(&u8::to_be_bytes(((t as u8) << 5) | (n as u8 & 0x1F)))
-                    .with_context(|| {
-                    format!("In encode_header: Failed to write header ({}, {})", t, n)
-                })?;
+                let written =
+                    buffer.write(&u8::to_be_bytes((t << 5) | (n as u8 & 0x1F))).with_context(
+                        || format!("In encode_header: Failed to write header ({}, {})", t, n),
+                    )?;
                 if written != 1 {
                     return Err(anyhow!("In encode_header: Buffer to small. ({}, {})", t, n));
                 }
             }
             n if n <= 0xFF => {
                 let written =
-                    buffer.write(&u8::to_be_bytes(((t as u8) << 5) | (24u8 & 0x1F))).with_context(
+                    buffer.write(&u8::to_be_bytes((t << 5) | (24u8 & 0x1F))).with_context(
                         || format!("In encode_header: Failed to write header ({}, {})", t, n),
                     )?;
                 if written != 1 {
@@ -286,7 +264,7 @@ pub mod cbor {
             }
             n if n <= 0xFFFF => {
                 let written =
-                    buffer.write(&u8::to_be_bytes(((t as u8) << 5) | (25u8 & 0x1F))).with_context(
+                    buffer.write(&u8::to_be_bytes((t << 5) | (25u8 & 0x1F))).with_context(
                         || format!("In encode_header: Failed to write header ({}, {})", t, n),
                     )?;
                 if written != 1 {
@@ -305,7 +283,7 @@ pub mod cbor {
             }
             n if n <= 0xFFFFFFFF => {
                 let written =
-                    buffer.write(&u8::to_be_bytes(((t as u8) << 5) | (26u8 & 0x1F))).with_context(
+                    buffer.write(&u8::to_be_bytes((t << 5) | (26u8 & 0x1F))).with_context(
                         || format!("In encode_header: Failed to write header ({}, {})", t, n),
                     )?;
                 if written != 1 {
@@ -324,13 +302,13 @@ pub mod cbor {
             }
             n => {
                 let written =
-                    buffer.write(&u8::to_be_bytes(((t as u8) << 5) | (27u8 & 0x1F))).with_context(
+                    buffer.write(&u8::to_be_bytes((t << 5) | (27u8 & 0x1F))).with_context(
                         || format!("In encode_header: Failed to write header ({}, {})", t, n),
                     )?;
                 if written != 1 {
                     return Err(anyhow!("In encode_header: Buffer to small. ({}, {})", t, n));
                 }
-                let written = buffer.write(&u64::to_be_bytes(n as u64)).with_context(|| {
+                let written = buffer.write(&u64::to_be_bytes(n)).with_context(|| {
                     format!("In encode_header: Failed to write size ({}, {})", t, n)
                 })?;
                 if written != 8 {
