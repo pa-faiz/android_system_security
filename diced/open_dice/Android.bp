@@ -1,0 +1,72 @@
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+rust_defaults {
+    name: "libdiced_open_dice_defaults",
+    crate_name: "diced_open_dice",
+    srcs: ["src/lib.rs"],
+    static_libs: [
+        "libopen_dice_cbor",
+    ],
+    vendor_available: true,
+    apex_available: [
+        "//apex_available:platform",
+        "com.android.virt",
+    ],
+}
+
+rust_library_rlib {
+    name: "libdiced_open_dice_nostd",
+    defaults: ["libdiced_open_dice_defaults"],
+    rustlibs: [
+        "libopen_dice_bcc_bindgen_nostd",
+        "libopen_dice_cbor_bindgen_nostd",
+        "libzeroize_nostd",
+    ],
+     whole_static_libs: [
+        "libopen_dice_cbor",
+        "libcrypto_baremetal",
+    ],
+}
+
+rust_library {
+    name: "libdiced_open_dice",
+    defaults: ["libdiced_open_dice_defaults"],
+    rustlibs: [
+        "libopen_dice_bcc_bindgen",
+        "libopen_dice_cbor_bindgen",
+        // For ZVec
+        "libkeystore2_crypto_rust",
+        "libzeroize",
+    ],
+    features: [
+        "std",
+    ],
+    whole_static_libs: [
+        "libopen_dice_bcc",
+    ],
+}
+
+rust_defaults {
+    name: "libdiced_open_dice_test_defaults",
+    crate_name: "diced_open_dice_test",
+    srcs: ["tests/*.rs"],
+    test_suites: ["general-tests"],
+}
+
+rust_test {
+    name: "libdiced_open_dice.integration_test",
+    defaults: ["libdiced_open_dice_test_defaults"],
+    rustlibs: [
+        "libdiced_open_dice",
+    ],
+}
+
+rust_test {
+    name: "libdiced_open_dice_nostd.integration_test",
+    defaults: ["libdiced_open_dice_test_defaults"],
+    rustlibs: [
+        "libdiced_open_dice_nostd",
+    ],
+}
