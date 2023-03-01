@@ -71,15 +71,6 @@ impl AuthSetBuilder {
         self
     }
 
-    /// Add Attestation-ID.
-    pub fn attestation_app_id(mut self, b: Vec<u8>) -> Self {
-        self.0.push(KeyParameter {
-            tag: Tag::ATTESTATION_APPLICATION_ID,
-            value: KeyParameterValue::Blob(b),
-        });
-        self
-    }
-
     /// Add No_auth_required.
     pub fn no_auth_required(mut self) -> Self {
         self.0.push(KeyParameter {
@@ -146,6 +137,15 @@ impl AuthSetBuilder {
     /// Add nonce.
     pub fn nonce(mut self, b: Vec<u8>) -> Self {
         self.0.push(KeyParameter { tag: Tag::NONCE, value: KeyParameterValue::Blob(b) });
+        self
+    }
+
+    /// Add CALLER_NONCE.
+    pub fn caller_nonce(mut self) -> Self {
+        self.0.push(KeyParameter {
+            tag: Tag::CALLER_NONCE,
+            value: KeyParameterValue::BoolValue(true),
+        });
         self
     }
 
