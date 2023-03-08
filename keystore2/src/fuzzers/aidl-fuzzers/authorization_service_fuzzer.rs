@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 The Android Open Source Project
+ * Copyright (C) 2023 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,11 +14,17 @@
  * limitations under the License.
  */
 
-#pragma once
+#![allow(missing_docs)]
+#![no_main]
+#[macro_use]
+extern crate libfuzzer_sys;
 
-#include "rust/cxx.h"
+use binder_random_parcel_rs::fuzz_service;
+use keystore2::authorization::AuthorizationManager;
 
-rust::Vec<rust::String> get_hidl_instances(rust::Str package, size_t major_version,
-                                           size_t minor_version, rust::Str interfaceName);
-rust::Vec<rust::String> get_aidl_instances(rust::Str package, size_t version,
-                                           rust::Str interfaceName);
+fuzz_target!(|data: &[u8]| {
+    let authorization_service = AuthorizationManager::new_native_binder().unwrap_or_else(|e| {
+        panic!("Failed to create android.security.authorization service because of {:?}", e);
+    });
+    fuzz_service(&mut authorization_service.as_binder(), data);
+});
