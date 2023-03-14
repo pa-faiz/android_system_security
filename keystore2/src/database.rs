@@ -830,7 +830,7 @@ impl AuthTokenEntry {
     pub fn satisfies(&self, user_secure_ids: &[i64], auth_type: HardwareAuthenticatorType) -> bool {
         user_secure_ids.iter().any(|&sid| {
             (sid == self.auth_token.userId || sid == self.auth_token.authenticatorId)
-                && (((auth_type.0 as i32) & (self.auth_token.authenticatorType.0 as i32)) != 0)
+                && ((auth_type.0 & self.auth_token.authenticatorType.0) != 0)
         })
     }
 
@@ -1859,7 +1859,8 @@ impl KeystoreDB {
                 let (_, hw_info) = get_keymint_dev_by_uuid(km_uuid)
                     .context("Error in retrieving keymint device by UUID.")?;
                 log_rkp_error_stats(MetricsRkpError::OUT_OF_KEYS, &hw_info.securityLevel);
-                return Err(KsError::Rc(ResponseCode::OUT_OF_KEYS)).context("Out of keys.");
+                return Err(KsError::Rc(ResponseCode::OUT_OF_KEYS_TRANSIENT_ERROR))
+                    .context("Out of keys.");
             } else if result > 1 {
                 return Err(KsError::sys())
                     .context(format!("Expected to update 1 entry, instead updated {}", result));
@@ -4562,7 +4563,7 @@ pub mod tests {
                 DESTINATION_UID,
                 |k, av| {
                     assert_eq!(Domain::SELINUX, k.domain);
-                    assert_eq!(DESTINATION_NAMESPACE as i64, k.nspace);
+                    assert_eq!(DESTINATION_NAMESPACE, k.nspace);
                     assert!(av.is_none());
                     Ok(())
                 },

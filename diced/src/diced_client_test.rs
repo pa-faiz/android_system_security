@@ -22,6 +22,7 @@ use binder::Strong;
 use diced_open_dice_cbor as dice;
 use nix::libc::uid_t;
 use std::convert::TryInto;
+use std::ffi::CString;
 
 static DICE_NODE_SERVICE_NAME: &str = "android.security.dice.IDiceNode";
 static DICE_MAINTENANCE_SERVICE_NAME: &str = "android.security.dice.IDiceMaintenance";
@@ -52,11 +53,7 @@ fn equivalence_test() {
         diced_utils::ResidentArtifacts::new(&former.cdiAttest, &former.cdiSeal, &former.bcc.data)
             .unwrap();
 
-    let input_values: Vec<diced_utils::InputValues> =
-        input_values.iter().map(|v| v.into()).collect();
-
-    let artifacts =
-        artifacts.execute_steps(input_values.iter().map(|v| v as &dyn dice::InputValues)).unwrap();
+    let artifacts = artifacts.execute_steps(input_values.iter()).unwrap();
     let (cdi_attest, cdi_seal, bcc) = artifacts.into_tuple();
     let from_former = diced_utils::make_bcc_handover(
         cdi_attest[..].try_into().unwrap(),
@@ -96,11 +93,7 @@ fn demote_test() {
     )
     .unwrap();
 
-    let input_values: Vec<diced_utils::InputValues> =
-        input_values.iter().map(|v| v.into()).collect();
-
-    let artifacts =
-        artifacts.execute_steps(input_values.iter().map(|v| v as &dyn dice::InputValues)).unwrap();
+    let artifacts = artifacts.execute_steps(input_values.iter()).unwrap();
     let (cdi_attest, cdi_seal, bcc) = artifacts.into_tuple();
     let from_former = diced_utils::make_bcc_handover(
         cdi_attest[..].try_into().unwrap(),
@@ -114,10 +107,11 @@ fn demote_test() {
 }
 
 fn client_input_values(uid: uid_t) -> BinderInputValues {
+    let desc = CString::new(format!("{}", uid)).unwrap();
     BinderInputValues {
         codeHash: [0; dice::HASH_SIZE],
         config: BinderConfig {
-            desc: dice::bcc::format_config_descriptor(Some(&format!("{}", uid)), None, true)
+            desc: dice::retry_bcc_format_config_descriptor(Some(desc.as_c_str()), None, true)
                 .unwrap(),
         },
         authorityHash: [0; dice::HASH_SIZE],
@@ -160,11 +154,8 @@ fn demote_self_test() {
     .unwrap();
 
     let client = [client];
-    let input_values: Vec<diced_utils::InputValues> =
-        input_values.iter().chain(client.iter()).map(|v| v.into()).collect();
 
-    let artifacts =
-        artifacts.execute_steps(input_values.iter().map(|v| v as &dyn dice::InputValues)).unwrap();
+    let artifacts = artifacts.execute_steps(input_values.iter().chain(client.iter())).unwrap();
     let (cdi_attest, cdi_seal, bcc) = artifacts.into_tuple();
     let from_former = diced_utils::make_bcc_handover(
         cdi_attest[..].try_into().unwrap(),

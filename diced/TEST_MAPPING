@@ -1,13 +1,16 @@
 {
   "presubmit": [
     {
+      "name": "libdiced_open_dice.integration_test"
+    },
+    {
+      "name": "libdiced_open_dice_nostd.integration_test"
+    },
+    {
       "name": "diced_utils_test"
     },
     {
       "name": "diced_sample_inputs_test"
-    },
-    {
-      "name": "diced_test"
     },
     {
       "name": "diced_vendor_test"
