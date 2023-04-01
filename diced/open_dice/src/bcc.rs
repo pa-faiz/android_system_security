@@ -14,7 +14,7 @@
 
 //! This module mirrors the content in open-dice/include/dice/android/bcc.h
 
-use crate::dice::{Cdi, CdiValues, InputValues, CDI_SIZE};
+use crate::dice::{Cdi, CdiValues, DiceArtifacts, InputValues, CDI_SIZE};
 use crate::error::{check_result, DiceError, Result};
 use open_dice_bcc_bindgen::{
     BccConfigValues, BccFormatConfigDescriptor, BccHandoverMainFlow, BccHandoverParse, BccMainFlow,
@@ -124,13 +124,28 @@ pub fn bcc_handover_main_flow(
 /// A BCC handover combines the BCC and CDIs in a single CBOR object.
 /// This struct is used as return of the function `bcc_handover_parse`, its lifetime is tied
 /// to the lifetime of the raw BCC handover slice.
+#[derive(Debug)]
 pub struct BccHandover<'a> {
     /// Attestation CDI.
-    pub cdi_attest: &'a Cdi,
+    cdi_attest: &'a [u8; CDI_SIZE],
     /// Sealing CDI.
-    pub cdi_seal: &'a Cdi,
+    cdi_seal: &'a [u8; CDI_SIZE],
     /// Boot Certificate Chain.
-    pub bcc: Option<&'a [u8]>,
+    bcc: Option<&'a [u8]>,
+}
+
+impl<'a> DiceArtifacts for BccHandover<'a> {
+    fn cdi_attest(&self) -> &[u8; CDI_SIZE] {
+        self.cdi_attest
+    }
+
+    fn cdi_seal(&self) -> &[u8; CDI_SIZE] {
+        self.cdi_seal
+    }
+
+    fn bcc(&self) -> Option<&[u8]> {
+        self.bcc
+    }
 }
 
 /// A BCC handover combines the BCC and CDIs in a single CBOR object.
@@ -173,6 +188,5 @@ fn sub_slice(buffer: &[u8], addr: *const u8, len: usize) -> Result<&[u8]> {
     let start: usize = unsafe {
         addr.offset_from(buffer.as_ptr()).try_into().map_err(|_| DiceError::PlatformError)?
     };
-    let end = start.checked_add(len).ok_or(DiceError::PlatformError)?;
-    buffer.get(start..end).ok_or(DiceError::PlatformError)
+    start.checked_add(len).and_then(|end| buffer.get(start..end)).ok_or(DiceError::PlatformError)
 }

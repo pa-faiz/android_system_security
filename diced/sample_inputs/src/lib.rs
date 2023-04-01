@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 The Android Open Source Project
+ * Copyright (C) 2023 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#pragma once
+//! Provides a set of sample inputs for a DICE chain and CDI values derived
+//! from it.
 
-#include "rust/cxx.h"
+mod sample_inputs;
 
-rust::Vec<rust::String> get_hidl_instances(rust::Str package, size_t major_version,
-                                           size_t minor_version, rust::Str interfaceName);
+pub use sample_inputs::make_sample_bcc_and_cdis;
