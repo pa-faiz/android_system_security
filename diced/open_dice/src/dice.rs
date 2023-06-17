@@ -23,7 +23,7 @@ use open_dice_cbor_bindgen::{
     DICE_INLINE_CONFIG_SIZE, DICE_PRIVATE_KEY_SEED_SIZE, DICE_PRIVATE_KEY_SIZE,
     DICE_PUBLIC_KEY_SIZE, DICE_SIGNATURE_SIZE,
 };
-use std::ptr;
+use std::{marker::PhantomData, ptr};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// The size of a DICE hash.
@@ -173,36 +173,44 @@ impl Config<'_> {
 
 /// Wrap of `DiceInputValues`.
 #[derive(Clone, Debug)]
-pub struct InputValues(DiceInputValues);
+pub struct InputValues<'a> {
+    dice_inputs: DiceInputValues,
+    // DiceInputValues contains a pointer to the separate config descriptor, which must therefore
+    // outlive it. Make sure the borrow checker can enforce that.
+    config_descriptor: PhantomData<&'a [u8]>,
+}
 
-impl InputValues {
+impl<'a> InputValues<'a> {
     /// Creates a new `InputValues`.
     pub fn new(
         code_hash: Hash,
-        config: Config,
+        config: Config<'a>,
         authority_hash: Hash,
         mode: DiceMode,
         hidden: Hidden,
     ) -> Self {
-        Self(DiceInputValues {
-            code_hash,
-            code_descriptor: ptr::null(),
-            code_descriptor_size: 0,
-            config_type: config.dice_config_type(),
-            config_value: config.inline_config(),
-            config_descriptor: config.descriptor_ptr(),
-            config_descriptor_size: config.descriptor_size(),
-            authority_hash,
-            authority_descriptor: ptr::null(),
-            authority_descriptor_size: 0,
-            mode,
-            hidden,
-        })
+        Self {
+            dice_inputs: DiceInputValues {
+                code_hash,
+                code_descriptor: ptr::null(),
+                code_descriptor_size: 0,
+                config_type: config.dice_config_type(),
+                config_value: config.inline_config(),
+                config_descriptor: config.descriptor_ptr(),
+                config_descriptor_size: config.descriptor_size(),
+                authority_hash,
+                authority_descriptor: ptr::null(),
+                authority_descriptor_size: 0,
+                mode,
+                hidden,
+            },
+            config_descriptor: PhantomData,
+        }
     }
 
     /// Returns a raw pointer to the wrapped `DiceInputValues`.
     pub fn as_ptr(&self) -> *const DiceInputValues {
-        &self.0 as *const DiceInputValues
+        &self.dice_inputs as *const DiceInputValues
     }
 }
 
@@ -211,13 +219,16 @@ pub fn derive_cdi_private_key_seed(cdi_attest: &Cdi) -> Result<PrivateKeySeed> {
     let mut seed = PrivateKeySeed::default();
     // SAFETY: The function writes to the buffer within the given bounds, and only reads the
     // input values. The first argument context is not used in this function.
-    check_result(unsafe {
-        DiceDeriveCdiPrivateKeySeed(
-            ptr::null_mut(), // context
-            cdi_attest.as_ptr(),
-            seed.as_mut_ptr(),
-        )
-    })?;
+    check_result(
+        unsafe {
+            DiceDeriveCdiPrivateKeySeed(
+                ptr::null_mut(), // context
+                cdi_attest.as_ptr(),
+                seed.as_mut_ptr(),
+            )
+        },
+        seed.0.len(),
+    )?;
     Ok(seed)
 }
 
@@ -226,14 +237,17 @@ pub fn derive_cdi_certificate_id(cdi_public_key: &[u8]) -> Result<DiceId> {
     let mut id = [0u8; ID_SIZE];
     // SAFETY: The function writes to the buffer within the given bounds, and only reads the
     // input values. The first argument context is not used in this function.
-    check_result(unsafe {
-        DiceDeriveCdiCertificateId(
-            ptr::null_mut(), // context
-            cdi_public_key.as_ptr(),
-            cdi_public_key.len(),
-            id.as_mut_ptr(),
-        )
-    })?;
+    check_result(
+        unsafe {
+            DiceDeriveCdiCertificateId(
+                ptr::null_mut(), // context
+                cdi_public_key.as_ptr(),
+                cdi_public_key.len(),
+                id.as_mut_ptr(),
+            )
+        },
+        id.len(),
+    )?;
     Ok(id)
 }
 
@@ -253,18 +267,21 @@ pub fn dice_main_flow(
     // SAFETY: The function only reads the current CDI values and inputs and writes
     // to `next_cdi_certificate` and next CDI values within its bounds.
     // The first argument can be null and is not used in the current implementation.
-    check_result(unsafe {
-        DiceMainFlow(
-            ptr::null_mut(), // context
-            current_cdi_attest.as_ptr(),
-            current_cdi_seal.as_ptr(),
-            input_values.as_ptr(),
-            next_cdi_certificate.len(),
-            next_cdi_certificate.as_mut_ptr(),
-            &mut next_cdi_certificate_actual_size,
-            next_cdi_values.cdi_attest.as_mut_ptr(),
-            next_cdi_values.cdi_seal.as_mut_ptr(),
-        )
-    })?;
+    check_result(
+        unsafe {
+            DiceMainFlow(
+                ptr::null_mut(), // context
+                current_cdi_attest.as_ptr(),
+                current_cdi_seal.as_ptr(),
+                input_values.as_ptr(),
+                next_cdi_certificate.len(),
+                next_cdi_certificate.as_mut_ptr(),
+                &mut next_cdi_certificate_actual_size,
+                next_cdi_values.cdi_attest.as_mut_ptr(),
+                next_cdi_values.cdi_seal.as_mut_ptr(),
+            )
+        },
+        next_cdi_certificate_actual_size,
+    )?;
     Ok(next_cdi_certificate_actual_size)
 }
