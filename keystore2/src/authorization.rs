@@ -19,7 +19,6 @@ use crate::error::Error as KeystoreError;
 use crate::error::anyhow_error_to_cstring;
 use crate::globals::{ENFORCEMENTS, SUPER_KEY, DB, LEGACY_IMPORTER};
 use crate::permission::KeystorePerm;
-use crate::super_key::UserState;
 use crate::utils::{check_keystore_permission, watchdog as wd};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     HardwareAuthToken::HardwareAuthToken,
@@ -129,6 +128,15 @@ impl AuthorizationManager {
         // Check keystore permission.
         check_keystore_permission(KeystorePerm::AddAuth).context(ks_err!())?;
 
+        log::info!(
+            "add_auth_token(challenge={}, userId={}, authId={}, authType={:#x}, timestamp={}ms)",
+            auth_token.challenge,
+            auth_token.userId,
+            auth_token.authenticatorId,
+            auth_token.authenticatorType.0,
+            auth_token.timestamp.milliSeconds,
+        );
+
         ENFORCEMENTS.add_auth_token(auth_token.clone());
         Ok(())
     }
@@ -158,31 +166,14 @@ impl AuthorizationManager {
                 let mut skm = SUPER_KEY.write().unwrap();
 
                 DB.with(|db| {
-                    skm.unlock_screen_lock_bound_key(
+                    skm.unlock_user(
                         &mut db.borrow_mut(),
+                        &LEGACY_IMPORTER,
                         user_id as u32,
                         &password,
                     )
                 })
-                .context(ks_err!("unlock_screen_lock_bound_key failed"))?;
-
-                // Unlock super key.
-                if let UserState::Uninitialized = DB
-                    .with(|db| {
-                        skm.unlock_and_get_user_state(
-                            &mut db.borrow_mut(),
-                            &LEGACY_IMPORTER,
-                            user_id as u32,
-                            &password,
-                        )
-                    })
-                    .context(ks_err!("Unlock with password."))?
-                {
-                    log::info!(
-                        "In on_lock_screen_event. Trying to unlock when LSKF is uninitialized."
-                    );
-                }
-
+                .context(ks_err!("Unlock with password."))?;
                 Ok(())
             }
             (LockScreenEvent::UNLOCK, None) => {
