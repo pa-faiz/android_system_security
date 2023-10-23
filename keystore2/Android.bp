@@ -46,6 +46,7 @@ rust_defaults {
         "libkeystore2_aaid-rust",
         "libkeystore2_apc_compat-rust",
         "libkeystore2_crypto_rust",
+        "libkeystore2_flags_rust",
         "libkeystore2_km_compat",
         "libkeystore2_selinux",
         "libkeystore2_hal_names_rust",
@@ -145,4 +146,17 @@ rust_binary {
         "librusqlite",
     ],
     afdo: true,
+}
+
+// Keystore Flag definitions
+aconfig_declarations {
+    name: "keystore2_flags",
+    package: "android.security.keystore2",
+    srcs: ["aconfig/flags.aconfig"],
+}
+
+rust_aconfig_library {
+    name: "libkeystore2_flags_rust",
+    crate_name: "keystore2_flags",
+    aconfig_declarations: "keystore2_flags",
 }
