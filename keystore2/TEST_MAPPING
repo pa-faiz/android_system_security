@@ -33,6 +33,12 @@
     },
     {
       "name": "keystore2_client_tests"
+    },
+    {
+      "name": "librkpd_client.test"
+    },
+    {
+      "name": "libwatchdog_rs.test"
     }
   ]
 }

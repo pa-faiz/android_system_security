@@ -12,11 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package android.security.authorization;
+//! A macro that generates a message containing the current source file name
+//! and line number.
 
-/** @hide */
-@Backing(type="int")
-enum LockScreenEvent {
-    UNLOCK = 0,
-    LOCK = 1,
+/// Generates a message containing the current source file name and line number.
+///
+/// # Examples
+///
+/// ```
+/// source_location_msg!("Key is expired.");
+/// Result:
+/// "src/lib.rs:7 Key is expired."
+/// ```
+#[macro_export]
+macro_rules! source_location_msg {
+    { $($arg:tt)+ } => {
+        format!("{}:{}: {}", file!(), line!(), format_args!($($arg)+))
+    };
+    {} => {
+        format!("{}:{}", file!(), line!())
+    };
 }

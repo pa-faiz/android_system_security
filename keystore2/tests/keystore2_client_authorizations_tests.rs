@@ -14,6 +14,9 @@
 
 use std::time::SystemTime;
 
+use openssl::bn::{BigNum, MsbOption};
+use openssl::x509::X509NameBuilder;
+
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     Algorithm::Algorithm, BlockMode::BlockMode, Digest::Digest, EcCurve::EcCurve,
     ErrorCode::ErrorCode, KeyPurpose::KeyPurpose, PaddingMode::PaddingMode,
@@ -25,13 +28,22 @@ use android_system_keystore2::aidl::android::system::keystore2::{
     KeyMetadata::KeyMetadata, ResponseCode::ResponseCode,
 };
 
+use aconfig_android_hardware_biometrics_rust;
+use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
+    HardwareAuthToken::HardwareAuthToken,
+    HardwareAuthenticatorType::HardwareAuthenticatorType
+};
+use android_hardware_security_secureclock::aidl::android::hardware::security::secureclock::Timestamp::Timestamp;
+
 use keystore2_test_utils::{
-    authorizations, get_keystore_service, key_generations, key_generations::Error,
+    authorizations, get_keystore_auth_service, get_keystore_service, key_generations,
+    key_generations::Error,
 };
 
 use crate::keystore2_client_test_utils::{
     delete_app_key, perform_sample_asym_sign_verify_op, perform_sample_hmac_sign_verify_op,
-    perform_sample_sym_key_decrypt_op, perform_sample_sym_key_encrypt_op, SAMPLE_PLAIN_TEXT,
+    perform_sample_sym_key_decrypt_op, perform_sample_sym_key_encrypt_op,
+    verify_certificate_serial_num, verify_certificate_subject_name, SAMPLE_PLAIN_TEXT,
 };
 
 use keystore2_test_utils::ffi_test_utils::get_value_from_attest_record;
@@ -672,4 +684,323 @@ fn keystore2_gen_key_auth_include_unique_id_success() {
 
     delete_app_key(&keystore2, alias_first).unwrap();
     delete_app_key(&keystore2, alias_second).unwrap();
+}
+
+/// Generate a key with `APPLICATION_DATA`. Test should create an operation using the
+/// same `APPLICATION_DATA` successfully.
+#[test]
+fn keystore2_gen_key_auth_app_data_test_success() {
+    let keystore2 = get_keystore_service();
+    let sec_level = keystore2.getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+
+    let gen_params = authorizations::AuthSetBuilder::new()
+        .no_auth_required()
+        .algorithm(Algorithm::EC)
+        .purpose(KeyPurpose::SIGN)
+        .purpose(KeyPurpose::VERIFY)
+        .digest(Digest::SHA_2_256)
+        .ec_curve(EcCurve::P_256)
+        .app_data(b"app-data".to_vec());
+
+    let alias = "ks_test_auth_tags_test";
+    let result = key_generations::create_key_and_operation(
+        &sec_level,
+        &gen_params,
+        &authorizations::AuthSetBuilder::new()
+            .purpose(KeyPurpose::SIGN)
+            .digest(Digest::SHA_2_256)
+            .app_data(b"app-data".to_vec()),
+        alias,
+    );
+    assert!(result.is_ok());
+    delete_app_key(&keystore2, alias).unwrap();
+}
+
+/// Generate a key with `APPLICATION_DATA`. Try to create an operation using the
+/// different `APPLICATION_DATA`, test should fail to create an operation with error code
+/// `INVALID_KEY_BLOB`.
+#[test]
+fn keystore2_gen_key_auth_app_data_test_fail() {
+    let keystore2 = get_keystore_service();
+    let sec_level = keystore2.getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+
+    let gen_params = authorizations::AuthSetBuilder::new()
+        .no_auth_required()
+        .algorithm(Algorithm::EC)
+        .purpose(KeyPurpose::SIGN)
+        .purpose(KeyPurpose::VERIFY)
+        .digest(Digest::SHA_2_256)
+        .ec_curve(EcCurve::P_256)
+        .app_data(b"app-data".to_vec());
+
+    let alias = "ks_test_auth_tags_test";
+    let result = key_generations::map_ks_error(key_generations::create_key_and_operation(
+        &sec_level,
+        &gen_params,
+        &authorizations::AuthSetBuilder::new()
+            .purpose(KeyPurpose::SIGN)
+            .digest(Digest::SHA_2_256)
+            .app_data(b"invalid-app-data".to_vec()),
+        alias,
+    ));
+    assert!(result.is_err());
+    assert_eq!(Error::Km(ErrorCode::INVALID_KEY_BLOB), result.unwrap_err());
+    delete_app_key(&keystore2, alias).unwrap();
+}
+
+/// Generate a key with `APPLICATION_ID`. Test should create an operation using the
+/// same `APPLICATION_ID` successfully.
+#[test]
+fn keystore2_gen_key_auth_app_id_test_success() {
+    let keystore2 = get_keystore_service();
+    let sec_level = keystore2.getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+
+    let gen_params = authorizations::AuthSetBuilder::new()
+        .no_auth_required()
+        .algorithm(Algorithm::EC)
+        .purpose(KeyPurpose::SIGN)
+        .purpose(KeyPurpose::VERIFY)
+        .digest(Digest::SHA_2_256)
+        .ec_curve(EcCurve::P_256)
+        .app_id(b"app-id".to_vec());
+
+    let alias = "ks_test_auth_tags_test";
+    let result = key_generations::create_key_and_operation(
+        &sec_level,
+        &gen_params,
+        &authorizations::AuthSetBuilder::new()
+            .purpose(KeyPurpose::SIGN)
+            .digest(Digest::SHA_2_256)
+            .app_id(b"app-id".to_vec()),
+        alias,
+    );
+    assert!(result.is_ok());
+    delete_app_key(&keystore2, alias).unwrap();
+}
+
+/// Generate a key with `APPLICATION_ID`. Try to create an operation using the
+/// different `APPLICATION_ID`, test should fail to create an operation with error code
+/// `INVALID_KEY_BLOB`.
+#[test]
+fn keystore2_gen_key_auth_app_id_test_fail() {
+    let keystore2 = get_keystore_service();
+    let sec_level = keystore2.getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+
+    let gen_params = authorizations::AuthSetBuilder::new()
+        .no_auth_required()
+        .algorithm(Algorithm::EC)
+        .purpose(KeyPurpose::SIGN)
+        .purpose(KeyPurpose::VERIFY)
+        .digest(Digest::SHA_2_256)
+        .ec_curve(EcCurve::P_256)
+        .app_id(b"app-id".to_vec());
+
+    let alias = "ks_test_auth_tags_test";
+    let result = key_generations::map_ks_error(key_generations::create_key_and_operation(
+        &sec_level,
+        &gen_params,
+        &authorizations::AuthSetBuilder::new()
+            .purpose(KeyPurpose::SIGN)
+            .digest(Digest::SHA_2_256)
+            .app_id(b"invalid-app-id".to_vec()),
+        alias,
+    ));
+    assert!(result.is_err());
+    assert_eq!(Error::Km(ErrorCode::INVALID_KEY_BLOB), result.unwrap_err());
+    delete_app_key(&keystore2, alias).unwrap();
+}
+
+/// Generate an attestation-key without specifying `APPLICATION_ID` and `APPLICATION_DATA`.
+/// Test should be able to generate a new key with specifying app-id and app-data using previously
+/// generated attestation-key.
+#[test]
+fn keystore2_gen_attested_key_auth_app_id_app_data_test_success() {
+    let keystore2 = get_keystore_service();
+    let sec_level = keystore2.getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+
+    // Generate attestation key.
+    let attest_gen_params = authorizations::AuthSetBuilder::new()
+        .no_auth_required()
+        .algorithm(Algorithm::EC)
+        .purpose(KeyPurpose::ATTEST_KEY)
+        .digest(Digest::SHA_2_256)
+        .ec_curve(EcCurve::P_256)
+        .attestation_challenge(b"foo".to_vec());
+    let attest_alias = "ks_test_auth_tags_attest_key";
+    let attest_key_metadata =
+        key_generations::generate_key(&sec_level, &attest_gen_params, attest_alias).unwrap();
+
+    // Generate attested key.
+    let alias = "ks_test_auth_tags_attested_key";
+    let gen_params = authorizations::AuthSetBuilder::new()
+        .no_auth_required()
+        .algorithm(Algorithm::EC)
+        .purpose(KeyPurpose::SIGN)
+        .purpose(KeyPurpose::VERIFY)
+        .digest(Digest::SHA_2_256)
+        .ec_curve(EcCurve::P_256)
+        .attestation_challenge(b"bar".to_vec())
+        .app_id(b"app-id".to_vec())
+        .app_data(b"app-data".to_vec());
+
+    let result = sec_level.generateKey(
+        &KeyDescriptor {
+            domain: Domain::APP,
+            nspace: -1,
+            alias: Some(alias.to_string()),
+            blob: None,
+        },
+        Some(&attest_key_metadata.key),
+        &gen_params,
+        0,
+        b"entropy",
+    );
+
+    assert!(result.is_ok());
+    delete_app_key(&keystore2, alias).unwrap();
+    delete_app_key(&keystore2, attest_alias).unwrap();
+}
+
+/// Generate an attestation-key with specifying `APPLICATION_ID` and `APPLICATION_DATA`.
+/// Test should try to generate an attested key using previously generated attestation-key without
+/// specifying app-id and app-data. Test should fail to generate a new key with error code
+/// `INVALID_KEY_BLOB`.
+/// It is an oversight of the Keystore API that `APPLICATION_ID` and `APPLICATION_DATA` tags cannot
+/// be provided to generateKey for an attestation key that was generated with them.
+#[test]
+fn keystore2_gen_attestation_key_with_auth_app_id_app_data_test_fail() {
+    let keystore2 = get_keystore_service();
+    let sec_level = keystore2.getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+
+    // Generate attestation key.
+    let attest_gen_params = authorizations::AuthSetBuilder::new()
+        .no_auth_required()
+        .algorithm(Algorithm::EC)
+        .purpose(KeyPurpose::ATTEST_KEY)
+        .digest(Digest::SHA_2_256)
+        .ec_curve(EcCurve::P_256)
+        .attestation_challenge(b"foo".to_vec())
+        .app_id(b"app-id".to_vec())
+        .app_data(b"app-data".to_vec());
+    let attest_alias = "ks_test_auth_tags_attest_key";
+    let attest_key_metadata =
+        key_generations::generate_key(&sec_level, &attest_gen_params, attest_alias).unwrap();
+
+    // Generate new key using above generated attestation key without providing app-id and app-data.
+    let alias = "ks_test_auth_tags_attested_key";
+    let gen_params = authorizations::AuthSetBuilder::new()
+        .no_auth_required()
+        .algorithm(Algorithm::EC)
+        .purpose(KeyPurpose::SIGN)
+        .purpose(KeyPurpose::VERIFY)
+        .digest(Digest::SHA_2_256)
+        .ec_curve(EcCurve::P_256)
+        .attestation_challenge(b"foo".to_vec());
+
+    let result = key_generations::map_ks_error(sec_level.generateKey(
+        &KeyDescriptor {
+            domain: Domain::APP,
+            nspace: -1,
+            alias: Some(alias.to_string()),
+            blob: None,
+        },
+        Some(&attest_key_metadata.key),
+        &gen_params,
+        0,
+        b"entropy",
+    ));
+
+    assert!(result.is_err());
+    assert_eq!(Error::Km(ErrorCode::INVALID_KEY_BLOB), result.unwrap_err());
+    delete_app_key(&keystore2, attest_alias).unwrap();
+}
+
+fn add_hardware_token(auth_type: HardwareAuthenticatorType) {
+    let keystore_auth = get_keystore_auth_service();
+
+    let token = HardwareAuthToken {
+        challenge: 0,
+        userId: 0,
+        authenticatorId: 0,
+        authenticatorType: auth_type,
+        timestamp: Timestamp { milliSeconds: 500 },
+        mac: vec![],
+    };
+    keystore_auth.addAuthToken(&token).unwrap();
+}
+
+#[test]
+fn keystore2_flagged_off_get_last_auth_password_permission_denied() {
+    if aconfig_android_hardware_biometrics_rust::last_authentication_time() {
+        return;
+    }
+
+    let keystore_auth = get_keystore_auth_service();
+
+    let result = keystore_auth.getLastAuthTime(0, &[HardwareAuthenticatorType::PASSWORD]);
+
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err().service_specific_error(), ResponseCode::PERMISSION_DENIED.0);
+}
+
+#[test]
+fn keystore2_flagged_on_get_last_auth_password_success() {
+    if !aconfig_android_hardware_biometrics_rust::last_authentication_time() {
+        return;
+    }
+
+    let keystore_auth = get_keystore_auth_service();
+
+    add_hardware_token(HardwareAuthenticatorType::PASSWORD);
+    assert!(keystore_auth.getLastAuthTime(0, &[HardwareAuthenticatorType::PASSWORD]).unwrap() > 0);
+}
+
+#[test]
+fn keystore2_flagged_on_get_last_auth_fingerprint_success() {
+    if !aconfig_android_hardware_biometrics_rust::last_authentication_time() {
+        return;
+    }
+
+    let keystore_auth = get_keystore_auth_service();
+
+    add_hardware_token(HardwareAuthenticatorType::FINGERPRINT);
+    assert!(
+        keystore_auth.getLastAuthTime(0, &[HardwareAuthenticatorType::FINGERPRINT]).unwrap() > 0
+    );
+}
+
+/// Generate a key with specifying `CERTIFICATE_SUBJECT and CERTIFICATE_SERIAL`. Test should
+/// generate a key successfully and verify the specified key parameters.
+#[test]
+fn keystore2_gen_key_auth_serial_number_subject_test_success() {
+    let keystore2 = get_keystore_service();
+    let sec_level = keystore2.getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+
+    let cert_subject = "test cert subject";
+    let mut x509_name = X509NameBuilder::new().unwrap();
+    x509_name.append_entry_by_text("CN", cert_subject).unwrap();
+    let x509_name = x509_name.build().to_der().unwrap();
+
+    let mut serial = BigNum::new().unwrap();
+    serial.rand(159, MsbOption::MAYBE_ZERO, false).unwrap();
+
+    let gen_params = authorizations::AuthSetBuilder::new()
+        .no_auth_required()
+        .algorithm(Algorithm::EC)
+        .purpose(KeyPurpose::SIGN)
+        .purpose(KeyPurpose::VERIFY)
+        .digest(Digest::SHA_2_256)
+        .ec_curve(EcCurve::P_256)
+        .attestation_challenge(b"foo".to_vec())
+        .cert_subject_name(x509_name)
+        .cert_serial(serial.to_vec());
+
+    let alias = "ks_test_auth_tags_test";
+    let key_metadata = key_generations::generate_key(&sec_level, &gen_params, alias).unwrap();
+    verify_certificate_subject_name(
+        key_metadata.certificate.as_ref().unwrap(),
+        cert_subject.as_bytes(),
+    );
+    verify_certificate_serial_num(key_metadata.certificate.as_ref().unwrap(), &serial);
+    delete_app_key(&keystore2, alias).unwrap();
 }

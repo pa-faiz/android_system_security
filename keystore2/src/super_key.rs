@@ -78,26 +78,35 @@ pub struct SuperKeyType<'a> {
     pub alias: &'a str,
     /// Encryption algorithm
     pub algorithm: SuperEncryptionAlgorithm,
+    /// What to call this key in log messages. Not used for anything else.
+    pub name: &'a str,
 }
 
 /// The user's AfterFirstUnlock super key. This super key is loaded into memory when the user first
 /// unlocks the device, and it remains in memory until the device reboots. This is used to encrypt
 /// keys that require user authentication but not an unlocked device.
-pub const USER_AFTER_FIRST_UNLOCK_SUPER_KEY: SuperKeyType =
-    SuperKeyType { alias: "USER_SUPER_KEY", algorithm: SuperEncryptionAlgorithm::Aes256Gcm };
+pub const USER_AFTER_FIRST_UNLOCK_SUPER_KEY: SuperKeyType = SuperKeyType {
+    alias: "USER_SUPER_KEY",
+    algorithm: SuperEncryptionAlgorithm::Aes256Gcm,
+    name: "AfterFirstUnlock super key",
+};
+
 /// The user's UnlockedDeviceRequired symmetric super key. This super key is loaded into memory each
 /// time the user unlocks the device, and it is cleared from memory each time the user locks the
 /// device. This is used to encrypt keys that use the UnlockedDeviceRequired key parameter.
 pub const USER_UNLOCKED_DEVICE_REQUIRED_SYMMETRIC_SUPER_KEY: SuperKeyType = SuperKeyType {
     alias: "USER_SCREEN_LOCK_BOUND_KEY",
     algorithm: SuperEncryptionAlgorithm::Aes256Gcm,
+    name: "UnlockedDeviceRequired symmetric super key",
 };
+
 /// The user's UnlockedDeviceRequired asymmetric super key. This is used to allow, while the device
 /// is locked, the creation of keys that use the UnlockedDeviceRequired key parameter. The private
 /// part of this key is loaded and cleared when the symmetric key is loaded and cleared.
 pub const USER_UNLOCKED_DEVICE_REQUIRED_P521_SUPER_KEY: SuperKeyType = SuperKeyType {
     alias: "USER_SCREEN_LOCK_BOUND_P521_KEY",
     algorithm: SuperEncryptionAlgorithm::EcdhP521,
+    name: "UnlockedDeviceRequired asymmetric super key",
 };
 
 /// Superencryption to apply to a new key.
@@ -239,11 +248,12 @@ struct BiometricUnlock {
 
 #[derive(Default)]
 struct UserSuperKeys {
-    /// The AfterFirstUnlock super key is used for LSKF binding of authentication bound keys. There
-    /// is one key per android user. The key is stored on flash encrypted with a key derived from a
-    /// secret, that is itself derived from the user's lock screen knowledge factor (LSKF). When the
-    /// user unlocks the device for the first time, this key is unlocked, i.e., decrypted, and stays
-    /// memory resident until the device reboots.
+    /// The AfterFirstUnlock super key is used for synthetic password binding of authentication
+    /// bound keys. There is one key per android user. The key is stored on flash encrypted with a
+    /// key derived from a secret, that is itself derived from the user's synthetic password. (In
+    /// most cases, the user's synthetic password can, in turn, only be decrypted using the user's
+    /// Lock Screen Knowledge Factor or LSKF.) When the user unlocks the device for the first time,
+    /// this key is unlocked, i.e., decrypted, and stays memory resident until the device reboots.
     after_first_unlock: Option<Arc<SuperKey>>,
     /// The UnlockedDeviceRequired symmetric super key works like the AfterFirstUnlock super key
     /// with the distinction that it is cleared from memory when the device is locked.
@@ -465,7 +475,7 @@ impl SuperKeyManager {
         }
     }
 
-    /// Checks if user has setup LSKF, even when super key cache is empty for the user.
+    /// Checks if the user's AfterFirstUnlock super key exists in the database (or legacy database).
     /// The reference to self is unused but it is required to prevent calling this function
     /// concurrently with skm state database changes.
     fn super_key_exists_in_db_for_user(
@@ -653,7 +663,8 @@ impl SuperKeyManager {
             SuperEncryptionType::None => Ok((key_blob.to_vec(), BlobMetaData::new())),
             SuperEncryptionType::AfterFirstUnlock => {
                 // Encrypt the given key blob with the user's AfterFirstUnlock super key. If the
-                // user has not unlocked the device since boot or has no LSKF, an error is returned.
+                // user has not unlocked the device since boot or the super keys were never
+                // initialized for the user for some reason, an error is returned.
                 match self
                     .get_user_state(db, legacy_importer, user_id)
                     .context(ks_err!("Failed to get user state for user {user_id}"))?
@@ -667,7 +678,7 @@ impl SuperKeyManager {
                         Err(Error::Rc(ResponseCode::LOCKED)).context(ks_err!("Device is locked."))
                     }
                     UserState::Uninitialized => Err(Error::Rc(ResponseCode::UNINITIALIZED))
-                        .context(ks_err!("LSKF is not setup for user {user_id}")),
+                        .context(ks_err!("User {user_id} does not have super keys")),
                 }
             }
             SuperEncryptionType::UnlockedDeviceRequired => {
@@ -717,6 +728,47 @@ impl SuperKeyManager {
         }
     }
 
+    fn create_super_key(
+        &mut self,
+        db: &mut KeystoreDB,
+        user_id: UserId,
+        key_type: &SuperKeyType,
+        password: &Password,
+        reencrypt_with: Option<Arc<SuperKey>>,
+    ) -> Result<Arc<SuperKey>> {
+        log::info!("Creating {} for user {}", key_type.name, user_id);
+        let (super_key, public_key) = match key_type.algorithm {
+            SuperEncryptionAlgorithm::Aes256Gcm => {
+                (generate_aes256_key().context(ks_err!("Failed to generate AES-256 key."))?, None)
+            }
+            SuperEncryptionAlgorithm::EcdhP521 => {
+                let key =
+                    ECDHPrivateKey::generate().context(ks_err!("Failed to generate ECDH key"))?;
+                (
+                    key.private_key().context(ks_err!("private_key failed"))?,
+                    Some(key.public_key().context(ks_err!("public_key failed"))?),
+                )
+            }
+        };
+        // Derive an AES-256 key from the password and re-encrypt the super key before we insert it
+        // in the database.
+        let (encrypted_super_key, blob_metadata) =
+            Self::encrypt_with_password(&super_key, password).context(ks_err!())?;
+        let mut key_metadata = KeyMetaData::new();
+        if let Some(pk) = public_key {
+            key_metadata.add(KeyMetaEntry::Sec1PublicKey(pk));
+        }
+        let key_entry = db
+            .store_super_key(user_id, key_type, &encrypted_super_key, &blob_metadata, &key_metadata)
+            .context(ks_err!("Failed to store super key."))?;
+        Ok(Arc::new(SuperKey {
+            algorithm: key_type.algorithm,
+            key: super_key,
+            id: SuperKeyIdentifier::DatabaseId(key_entry.id()),
+            reencrypt_with,
+        }))
+    }
+
     /// Fetch a superencryption key from the database, or create it if it doesn't already exist.
     /// When this is called, the caller must hold the lock on the SuperKeyManager.
     /// So it's OK that the check and creation are different DB transactions.
@@ -737,43 +789,7 @@ impl SuperKeyManager {
                 reencrypt_with,
             )?)
         } else {
-            let (super_key, public_key) = match key_type.algorithm {
-                SuperEncryptionAlgorithm::Aes256Gcm => (
-                    generate_aes256_key().context(ks_err!("Failed to generate AES 256 key."))?,
-                    None,
-                ),
-                SuperEncryptionAlgorithm::EcdhP521 => {
-                    let key = ECDHPrivateKey::generate()
-                        .context(ks_err!("Failed to generate ECDH key"))?;
-                    (
-                        key.private_key().context(ks_err!("private_key failed"))?,
-                        Some(key.public_key().context(ks_err!("public_key failed"))?),
-                    )
-                }
-            };
-            // Derive an AES256 key from the password and re-encrypt the super key
-            // before we insert it in the database.
-            let (encrypted_super_key, blob_metadata) =
-                Self::encrypt_with_password(&super_key, password).context(ks_err!())?;
-            let mut key_metadata = KeyMetaData::new();
-            if let Some(pk) = public_key {
-                key_metadata.add(KeyMetaEntry::Sec1PublicKey(pk));
-            }
-            let key_entry = db
-                .store_super_key(
-                    user_id,
-                    key_type,
-                    &encrypted_super_key,
-                    &blob_metadata,
-                    &key_metadata,
-                )
-                .context(ks_err!("Failed to store super key."))?;
-            Ok(Arc::new(SuperKey {
-                algorithm: key_type.algorithm,
-                key: super_key,
-                id: SuperKeyIdentifier::DatabaseId(key_entry.id()),
-                reencrypt_with,
-            }))
+            self.create_super_key(db, user_id, key_type, password, reencrypt_with)
         }
     }
 
@@ -1117,6 +1133,37 @@ impl SuperKeyManager {
         }
     }
 
+    /// Initializes the given user by creating their super keys, both AfterFirstUnlock and
+    /// UnlockedDeviceRequired. If allow_existing is true, then the user already being initialized
+    /// is not considered an error.
+    pub fn initialize_user(
+        &mut self,
+        db: &mut KeystoreDB,
+        legacy_importer: &LegacyImporter,
+        user_id: UserId,
+        password: &Password,
+        allow_existing: bool,
+    ) -> Result<()> {
+        // Create the AfterFirstUnlock super key.
+        if self.super_key_exists_in_db_for_user(db, legacy_importer, user_id)? {
+            log::info!("AfterFirstUnlock super key already exists");
+            if !allow_existing {
+                return Err(Error::sys()).context(ks_err!("Tried to re-init an initialized user!"));
+            }
+        } else {
+            let super_key = self
+                .create_super_key(db, user_id, &USER_AFTER_FIRST_UNLOCK_SUPER_KEY, password, None)
+                .context(ks_err!("Failed to create AfterFirstUnlock super key"))?;
+
+            self.install_after_first_unlock_key_for_user(user_id, super_key)
+                .context(ks_err!("Failed to install AfterFirstUnlock super key for user"))?;
+        }
+
+        // Create the UnlockedDeviceRequired super keys.
+        self.unlock_unlocked_device_required_keys(db, user_id, password)
+            .context(ks_err!("Failed to create UnlockedDeviceRequired super keys"))
+    }
+
     /// Unlocks the given user with the given password.
     ///
     /// If the user state is BeforeFirstUnlock:
@@ -1172,15 +1219,15 @@ impl SuperKeyManager {
 /// This enum represents different states of the user's life cycle in the device.
 /// For now, only three states are defined. More states may be added later.
 pub enum UserState {
-    // The user has registered LSKF and has unlocked the device by entering PIN/Password,
-    // and hence the AfterFirstUnlock super key is available in the cache.
+    // The user's super keys exist, and the user has unlocked the device at least once since boot.
+    // Hence, the AfterFirstUnlock super key is available in the cache.
     AfterFirstUnlock(Arc<SuperKey>),
-    // The user has registered LSKF, but has not unlocked the device using password, after reboot.
-    // Hence the AfterFirstUnlock and UnlockedDeviceRequired super keys are not available in the
-    // cache. However, they exist in the database in encrypted form.
+    // The user's super keys exist, but the user hasn't unlocked the device at least once since
+    // boot. Hence, the AfterFirstUnlock and UnlockedDeviceRequired super keys are not available in
+    // the cache. However, they exist in the database in encrypted form.
     BeforeFirstUnlock,
-    // There's no user in the device for the given user id, or the user with the user id has not
-    // setup LSKF.
+    // The user's super keys don't exist. I.e., there's no user with the given user ID, or the user
+    // is in the process of being created or destroyed.
     Uninitialized,
 }
 

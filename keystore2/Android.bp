@@ -41,6 +41,8 @@ rust_defaults {
         "android.security.maintenance-rust",
         "android.security.metrics-rust",
         "android.security.rkp_aidl-rust",
+        "libaconfig_android_hardware_biometrics_rust",
+        "libandroid_security_flags_rust",
         "libanyhow",
         "libbinder_rs",
         "libkeystore2_aaid-rust",
@@ -54,12 +56,15 @@ rust_defaults {
         "liblibc",
         "liblog_event_list",
         "liblog_rust",
+        "libmessage_macro",
         "librand",
+        "librkpd_client",
         "librustutils",
         "libserde",
         "libserde_cbor",
         "libthiserror",
         "libtokio",
+        "libwatchdog_rs",
     ],
     shared_libs: [
         "libcutils",
@@ -160,4 +165,10 @@ rust_aconfig_library {
     name: "libkeystore2_flags_rust",
     crate_name: "keystore2_flags",
     aconfig_declarations: "keystore2_flags",
+}
+
+rust_aconfig_library {
+    name: "libaconfig_android_hardware_biometrics_rust",
+    crate_name: "aconfig_android_hardware_biometrics_rust",
+    aconfig_declarations: "android.hardware.biometrics.flags-aconfig",
 }

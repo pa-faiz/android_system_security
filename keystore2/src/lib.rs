@@ -28,7 +28,6 @@ pub mod globals;
 pub mod id_rotation;
 /// Internal Representation of Key Parameter and convenience functions.
 pub mod key_parameter;
-pub mod ks_err;
 pub mod legacy_blob;
 pub mod legacy_importer;
 pub mod maintenance;
@@ -38,7 +37,6 @@ pub mod operation;
 pub mod permission;
 pub mod raw_device;
 pub mod remote_provisioning;
-pub mod rkpd_client;
 pub mod security_level;
 pub mod service;
 pub mod shared_secret_negotiation;
@@ -50,6 +48,6 @@ mod gc;
 mod km_compat;
 mod super_key;
 mod sw_keyblob;
+mod watchdog_helper;
 
-#[cfg(feature = "watchdog")]
-mod watchdog;
+use message_macro::source_location_msg as ks_err;

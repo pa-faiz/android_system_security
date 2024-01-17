@@ -1,4 +1,4 @@
-// Copyright 2022, The Android Open Source Project
+// Copyright 2023, The Android Open Source Project
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,31 +21,35 @@ package {
     default_applicable_licenses: ["system_security_license"],
 }
 
-rust_test {
-    name: "keystore2_client_tests",
-    compile_multilib: "first",
-    defaults: [
-        "keymint_use_latest_hal_aidl_rust",
-        "keystore2_use_latest_aidl_rust",
-    ],
-    srcs: ["keystore2_client_tests.rs"],
-    test_suites: [
-        "general-tests",
-        "vts",
-    ],
-    test_config: "AndroidTest.xml",
-
+rust_defaults {
+    name: "librkpd_client_defaults",
+    crate_name: "rkpd_client",
+    srcs: ["src/lib.rs"],
     rustlibs: [
-        "android.hardware.security.secureclock-V1-rust",
-        "android.security.authorization-rust",
-        "libaconfig_android_hardware_biometrics_rust",
+        "android.security.rkp_aidl-rust",
+        "libanyhow",
         "libbinder_rs",
-        "libkeystore2_test_utils",
-        "libnix",
-        "libopenssl",
-        "librustutils",
-        "libserde",
-        "packagemanager_aidl-rust",
+        "liblog_rust",
+        "libmessage_macro",
+        "libthiserror",
+        "libtokio",
     ],
-    require_root: true,
+}
+
+rust_library {
+    name: "librkpd_client",
+    defaults: ["librkpd_client_defaults"],
+    apex_available: [
+        "//apex_available:platform",
+        "com.android.virt",
+    ],
+}
+
+rust_test {
+    name: "librkpd_client.test",
+    defaults: ["librkpd_client_defaults"],
+    test_suites: ["general-tests"],
+    rustlibs: [
+        "librand",
+    ],
 }
