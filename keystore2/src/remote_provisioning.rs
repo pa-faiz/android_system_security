@@ -31,7 +31,6 @@ use android_system_keystore2::aidl::android::system::keystore2::{
 use anyhow::{Context, Result};
 use keystore2_crypto::parse_subject_from_certificate;
 
-use crate::database::Uuid;
 use crate::error::wrapped_rkpd_error_to_ks_error;
 use crate::globals::get_remotely_provisioned_component_name;
 use crate::ks_err;
@@ -44,18 +43,12 @@ use android_security_metrics::aidl::android::security::metrics::RkpError::RkpErr
 #[derive(Default)]
 pub struct RemProvState {
     security_level: SecurityLevel,
-    km_uuid: Uuid,
 }
 
 impl RemProvState {
     /// Creates a RemProvState struct.
-    pub fn new(security_level: SecurityLevel, km_uuid: Uuid) -> Self {
-        Self { security_level, km_uuid }
-    }
-
-    /// Returns the uuid for the KM instance attached to this RemProvState struct.
-    pub fn get_uuid(&self) -> Uuid {
-        self.km_uuid
+    pub fn new(security_level: SecurityLevel) -> Self {
+        Self { security_level }
     }
 
     fn is_rkp_only(&self) -> bool {
@@ -136,6 +129,6 @@ fn get_rkpd_attestation_key(
     // by the calling function and allow for natural fallback to the factory key.
     let rpc_name = get_remotely_provisioned_component_name(security_level)
         .context(ks_err!("Trying to get IRPC name."))?;
-    let _wd = wd::watch_millis("Calling get_rkpd_attestation_key()", 500);
+    let _wd = wd::watch("Calling get_rkpd_attestation_key()");
     rkpd_client::get_rkpd_attestation_key(&rpc_name, caller_uid)
 }
