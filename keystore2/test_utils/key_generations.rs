@@ -14,14 +14,12 @@
 
 //! This module implements test utils to generate various types of keys.
 
-use anyhow::Result;
-use core::ops::Range;
-use nix::unistd::getuid;
-use std::collections::HashSet;
-use std::fmt::Write;
-
-use binder::ThreadState;
-
+use crate::authorizations::AuthSetBuilder;
+use crate::ffi_test_utils::{
+    get_os_patchlevel, get_os_version, get_value_from_attest_record, get_vendor_patchlevel,
+    validate_certchain_with_strict_issuer_check,
+};
+use crate::SecLevel;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     Algorithm::Algorithm, BlockMode::BlockMode, Digest::Digest, EcCurve::EcCurve,
     ErrorCode::ErrorCode, HardwareAuthenticatorType::HardwareAuthenticatorType,
@@ -30,18 +28,16 @@ use android_hardware_security_keymint::aidl::android::hardware::security::keymin
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
     AuthenticatorSpec::AuthenticatorSpec, Authorization::Authorization,
-    CreateOperationResponse::CreateOperationResponse, Domain::Domain,
-    IKeystoreSecurityLevel::IKeystoreSecurityLevel, KeyDescriptor::KeyDescriptor,
+    CreateOperationResponse::CreateOperationResponse, Domain::Domain, KeyDescriptor::KeyDescriptor,
     KeyMetadata::KeyMetadata, ResponseCode::ResponseCode,
 };
-
-use crate::authorizations::AuthSetBuilder;
 use android_system_keystore2::binder::{ExceptionCode, Result as BinderResult};
-
-use crate::ffi_test_utils::{
-    get_os_patchlevel, get_os_version, get_value_from_attest_record, get_vendor_patchlevel,
-    validate_certchain_with_strict_issuer_check,
-};
+use anyhow::Result;
+use binder::ThreadState;
+use core::ops::Range;
+use nix::unistd::getuid;
+use std::collections::HashSet;
+use std::fmt::Write;
 
 /// Shell namespace.
 pub const SELINUX_SHELL_NAMESPACE: i64 = 1;
@@ -391,12 +387,6 @@ pub fn map_ks_error<T>(r: BinderResult<T>) -> Result<T, Error> {
     })
 }
 
-/// Indicate whether the default device is KeyMint (rather than Keymaster).
-pub fn has_default_keymint() -> bool {
-    binder::is_declared("android.hardware.security.keymint.IKeyMintDevice/default")
-        .expect("Could not check for declared keymint interface")
-}
-
 /// Verify that given key param is listed in given authorizations list.
 pub fn check_key_param(authorizations: &[Authorization], key_param: &KeyParameter) -> bool {
     authorizations.iter().any(|auth| &auth.keyParameter == key_param)
@@ -404,6 +394,7 @@ pub fn check_key_param(authorizations: &[Authorization], key_param: &KeyParamete
 
 /// Verify the given key authorizations with the expected authorizations.
 pub fn check_key_authorizations(
+    sl: &SecLevel,
     authorizations: &[Authorization],
     expected_params: &[KeyParameter],
     expected_key_origin: KeyOrigin,
@@ -412,7 +403,7 @@ pub fn check_key_authorizations(
     authorizations.iter().all(|auth| {
         // Ignore `INVALID` tag if the backend is Keymaster and not KeyMint.
         // Keymaster allows INVALID tag for unsupported key parameters.
-        if !has_default_keymint() && auth.keyParameter.tag == Tag::INVALID {
+        if sl.is_keymaster() && auth.keyParameter.tag == Tag::INVALID {
             return true;
         }
         assert!(
@@ -423,7 +414,7 @@ pub fn check_key_authorizations(
         true
     });
 
-    //Check allowed-expected-key-parameters are present in given key authorizations list.
+    // Check allowed-expected-key-parameters are present in given key authorizations list.
     expected_params.iter().all(|key_param| {
         // `INCLUDE_UNIQUE_ID` is not strictly expected to be in key authorizations but has been
         // put there by some implementations so cope with that.
@@ -436,7 +427,7 @@ pub fn check_key_authorizations(
         // Ignore below parameters if the backend is Keymaster and not KeyMint.
         // Keymaster does not support these parameters. These key parameters are introduced in
         // KeyMint1.0.
-        if !has_default_keymint() {
+        if sl.is_keymaster() {
             if matches!(key_param.tag, Tag::RSA_OAEP_MGF_DIGEST | Tag::USAGE_COUNT_LIMIT) {
                 return true;
             }
@@ -457,11 +448,15 @@ pub fn check_key_authorizations(
         true
     });
 
-    check_common_auths(authorizations, expected_key_origin);
+    check_common_auths(sl, authorizations, expected_key_origin);
 }
 
 /// Verify common key authorizations.
-fn check_common_auths(authorizations: &[Authorization], expected_key_origin: KeyOrigin) {
+fn check_common_auths(
+    sl: &SecLevel,
+    authorizations: &[Authorization],
+    expected_key_origin: KeyOrigin,
+) {
     assert!(check_key_param(
         authorizations,
         &KeyParameter {
@@ -505,7 +500,7 @@ fn check_common_auths(authorizations: &[Authorization], expected_key_origin: Key
         }
     ));
 
-    if has_default_keymint() {
+    if sl.is_keymint() {
         assert!(authorizations
             .iter()
             .map(|auth| &auth.keyParameter)
@@ -532,7 +527,7 @@ pub fn get_key_auth(authorizations: &[Authorization], tag: Tag) -> Option<&Autho
 ///     Digest: SHA_2_256
 ///     Curve: P_256
 pub fn generate_ec_p256_signing_key(
-    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    sl: &SecLevel,
     domain: Domain,
     nspace: i64,
     alias: Option<String>,
@@ -552,7 +547,7 @@ pub fn generate_ec_p256_signing_key(
         gen_params = gen_params.clone().attestation_challenge(challenge.to_vec());
     }
 
-    match sec_level.generateKey(
+    match sl.binder.generateKey(
         &KeyDescriptor { domain, nspace, alias, blob: None },
         None,
         &gen_params,
@@ -569,6 +564,7 @@ pub fn generate_ec_p256_signing_key(
             }
 
             check_key_authorizations(
+                sl,
                 &key_metadata.authorizations,
                 &gen_params,
                 KeyOrigin::GENERATED,
@@ -581,7 +577,7 @@ pub fn generate_ec_p256_signing_key(
 
 /// Generate EC signing key.
 pub fn generate_ec_key(
-    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    sl: &SecLevel,
     domain: Domain,
     nspace: i64,
     alias: Option<String>,
@@ -596,7 +592,7 @@ pub fn generate_ec_key(
         .digest(digest)
         .ec_curve(ec_curve);
 
-    let key_metadata = sec_level.generateKey(
+    let key_metadata = sl.binder.generateKey(
         &KeyDescriptor { domain, nspace, alias, blob: None },
         None,
         &gen_params,
@@ -615,13 +611,13 @@ pub fn generate_ec_key(
     } else {
         assert!(key_metadata.key.blob.is_none());
     }
-    check_key_authorizations(&key_metadata.authorizations, &gen_params, KeyOrigin::GENERATED);
+    check_key_authorizations(sl, &key_metadata.authorizations, &gen_params, KeyOrigin::GENERATED);
     Ok(key_metadata)
 }
 
 /// Generate a RSA key with the given key parameters, alias, domain and namespace.
 pub fn generate_rsa_key(
-    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    sl: &SecLevel,
     domain: Domain,
     nspace: i64,
     alias: Option<String>,
@@ -653,7 +649,7 @@ pub fn generate_rsa_key(
         gen_params = gen_params.attestation_challenge(value.to_vec())
     }
 
-    let key_metadata = sec_level.generateKey(
+    let key_metadata = sl.binder.generateKey(
         &KeyDescriptor { domain, nspace, alias, blob: None },
         attest_key,
         &gen_params,
@@ -677,7 +673,7 @@ pub fn generate_rsa_key(
             || key_metadata.key.blob.is_none()
     );
 
-    check_key_authorizations(&key_metadata.authorizations, &gen_params, KeyOrigin::GENERATED);
+    check_key_authorizations(sl, &key_metadata.authorizations, &gen_params, KeyOrigin::GENERATED);
     // If `RSA_OAEP_MGF_DIGEST` tag is not mentioned explicitly while generating/importing a key,
     // then make sure `RSA_OAEP_MGF_DIGEST` tag with default value (SHA1) must not be included in
     // key authorization list.
@@ -695,7 +691,7 @@ pub fn generate_rsa_key(
 
 /// Generate AES/3DES key.
 pub fn generate_sym_key(
-    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    sl: &SecLevel,
     algorithm: Algorithm,
     size: i32,
     alias: &str,
@@ -716,7 +712,7 @@ pub fn generate_sym_key(
         gen_params = gen_params.min_mac_length(val);
     }
 
-    let key_metadata = sec_level.generateKey(
+    let key_metadata = sl.binder.generateKey(
         &KeyDescriptor {
             domain: Domain::APP,
             nspace: -1,
@@ -734,13 +730,13 @@ pub fn generate_sym_key(
 
     // Should not have an attestation record.
     assert!(key_metadata.certificateChain.is_none());
-    check_key_authorizations(&key_metadata.authorizations, &gen_params, KeyOrigin::GENERATED);
+    check_key_authorizations(sl, &key_metadata.authorizations, &gen_params, KeyOrigin::GENERATED);
     Ok(key_metadata)
 }
 
 /// Generate HMAC key.
 pub fn generate_hmac_key(
-    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    sl: &SecLevel,
     alias: &str,
     key_size: i32,
     min_mac_len: i32,
@@ -755,7 +751,7 @@ pub fn generate_hmac_key(
         .min_mac_length(min_mac_len)
         .digest(digest);
 
-    let key_metadata = sec_level.generateKey(
+    let key_metadata = sl.binder.generateKey(
         &KeyDescriptor {
             domain: Domain::APP,
             nspace: -1,
@@ -774,7 +770,7 @@ pub fn generate_hmac_key(
     // Should not have an attestation record.
     assert!(key_metadata.certificateChain.is_none());
 
-    check_key_authorizations(&key_metadata.authorizations, &gen_params, KeyOrigin::GENERATED);
+    check_key_authorizations(sl, &key_metadata.authorizations, &gen_params, KeyOrigin::GENERATED);
     Ok(key_metadata)
 }
 
@@ -785,7 +781,7 @@ pub fn generate_hmac_key(
 ///     RSA-Key-Size: 2048
 ///     EC-Curve: EcCurve::P_256
 pub fn generate_attestation_key(
-    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    sl: &SecLevel,
     algorithm: Algorithm,
     att_challenge: &[u8],
 ) -> binder::Result<KeyMetadata> {
@@ -794,7 +790,7 @@ pub fn generate_attestation_key(
     if algorithm == Algorithm::RSA {
         let alias = "ks_rsa_attest_test_key";
         let metadata = generate_rsa_key(
-            sec_level,
+            sl,
             Domain::APP,
             -1,
             Some(alias.to_string()),
@@ -812,13 +808,9 @@ pub fn generate_attestation_key(
         .unwrap();
         Ok(metadata)
     } else {
-        let metadata = generate_ec_attestation_key(
-            sec_level,
-            att_challenge,
-            Digest::SHA_2_256,
-            EcCurve::P_256,
-        )
-        .unwrap();
+        let metadata =
+            generate_ec_attestation_key(sl, att_challenge, Digest::SHA_2_256, EcCurve::P_256)
+                .unwrap();
 
         Ok(metadata)
     }
@@ -827,7 +819,7 @@ pub fn generate_attestation_key(
 /// Generate EC attestation key with the given
 ///    curve, attestation-challenge and attestation-app-id.
 pub fn generate_ec_attestation_key(
-    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    sl: &SecLevel,
     att_challenge: &[u8],
     digest: Digest,
     ec_curve: EcCurve,
@@ -841,7 +833,7 @@ pub fn generate_ec_attestation_key(
         .digest(digest)
         .attestation_challenge(att_challenge.to_vec());
 
-    let attestation_key_metadata = sec_level.generateKey(
+    let attestation_key_metadata = sl.binder.generateKey(
         &KeyDescriptor {
             domain: Domain::APP,
             nspace: -1,
@@ -860,6 +852,7 @@ pub fn generate_ec_attestation_key(
     assert!(attestation_key_metadata.certificateChain.is_some());
 
     check_key_authorizations(
+        sl,
         &attestation_key_metadata.authorizations,
         &gen_params,
         KeyOrigin::GENERATED,
@@ -869,7 +862,7 @@ pub fn generate_ec_attestation_key(
 
 /// Generate EC-P-256 key and attest it with given attestation key.
 pub fn generate_ec_256_attested_key(
-    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    sl: &SecLevel,
     alias: Option<String>,
     att_challenge: &[u8],
     attest_key: &KeyDescriptor,
@@ -883,7 +876,8 @@ pub fn generate_ec_256_attested_key(
         .ec_curve(EcCurve::P_256)
         .attestation_challenge(att_challenge.to_vec());
 
-    let ec_key_metadata = sec_level
+    let ec_key_metadata = sl
+        .binder
         .generateKey(
             &KeyDescriptor { domain: Domain::APP, nspace: -1, alias, blob: None },
             Some(attest_key),
@@ -898,19 +892,25 @@ pub fn generate_ec_256_attested_key(
     // Shouldn't have an attestation record.
     assert!(ec_key_metadata.certificateChain.is_none());
 
-    check_key_authorizations(&ec_key_metadata.authorizations, &ec_gen_params, KeyOrigin::GENERATED);
+    check_key_authorizations(
+        sl,
+        &ec_key_metadata.authorizations,
+        &ec_gen_params,
+        KeyOrigin::GENERATED,
+    );
     Ok(ec_key_metadata)
 }
 
 /// Imports above defined RSA key - `RSA_2048_KEY` and validates imported key parameters.
 pub fn import_rsa_2048_key(
-    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    sl: &SecLevel,
     domain: Domain,
     nspace: i64,
     alias: Option<String>,
     import_params: AuthSetBuilder,
 ) -> binder::Result<KeyMetadata> {
-    let key_metadata = sec_level
+    let key_metadata = sl
+        .binder
         .importKey(
             &KeyDescriptor { domain, nspace, alias, blob: None },
             None,
@@ -923,7 +923,7 @@ pub fn import_rsa_2048_key(
     assert!(key_metadata.certificate.is_some());
     assert!(key_metadata.certificateChain.is_none());
 
-    check_key_authorizations(&key_metadata.authorizations, &import_params, KeyOrigin::IMPORTED);
+    check_key_authorizations(sl, &key_metadata.authorizations, &import_params, KeyOrigin::IMPORTED);
 
     // Check below auths explicitly, they might not be addd in import parameters.
     assert!(check_key_param(
@@ -967,13 +967,14 @@ pub fn import_rsa_2048_key(
 
 /// Imports above defined EC key - `EC_P_256_KEY` and validates imported key parameters.
 pub fn import_ec_p_256_key(
-    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    sl: &SecLevel,
     domain: Domain,
     nspace: i64,
     alias: Option<String>,
     import_params: AuthSetBuilder,
 ) -> binder::Result<KeyMetadata> {
-    let key_metadata = sec_level
+    let key_metadata = sl
+        .binder
         .importKey(
             &KeyDescriptor { domain, nspace, alias, blob: None },
             None,
@@ -986,7 +987,7 @@ pub fn import_ec_p_256_key(
     assert!(key_metadata.certificate.is_some());
     assert!(key_metadata.certificateChain.is_none());
 
-    check_key_authorizations(&key_metadata.authorizations, &import_params, KeyOrigin::IMPORTED);
+    check_key_authorizations(sl, &key_metadata.authorizations, &import_params, KeyOrigin::IMPORTED);
 
     // Check below auths explicitly, they might not be addd in import parameters.
     assert!(check_key_param(
@@ -1013,7 +1014,7 @@ pub fn import_ec_p_256_key(
 
 /// Import sample AES key and validate its key parameters.
 pub fn import_aes_key(
-    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    sl: &SecLevel,
     domain: Domain,
     nspace: i64,
     alias: Option<String>,
@@ -1030,7 +1031,7 @@ pub fn import_aes_key(
         .purpose(KeyPurpose::DECRYPT)
         .padding_mode(PaddingMode::PKCS7);
 
-    let key_metadata = sec_level.importKey(
+    let key_metadata = sl.binder.importKey(
         &KeyDescriptor { domain, nspace, alias, blob: None },
         None,
         &import_params,
@@ -1038,7 +1039,7 @@ pub fn import_aes_key(
         AES_KEY,
     )?;
 
-    check_key_authorizations(&key_metadata.authorizations, &import_params, KeyOrigin::IMPORTED);
+    check_key_authorizations(sl, &key_metadata.authorizations, &import_params, KeyOrigin::IMPORTED);
 
     // Check below auths explicitly, they might not be addd in import parameters.
     assert!(check_key_param(
@@ -1070,7 +1071,7 @@ pub fn import_aes_key(
 
 /// Import sample 3DES key and validate its key parameters.
 pub fn import_3des_key(
-    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    sl: &SecLevel,
     domain: Domain,
     nspace: i64,
     alias: Option<String>,
@@ -1089,7 +1090,7 @@ pub fn import_3des_key(
         .purpose(KeyPurpose::DECRYPT)
         .padding_mode(PaddingMode::PKCS7);
 
-    let key_metadata = sec_level.importKey(
+    let key_metadata = sl.binder.importKey(
         &KeyDescriptor { domain, nspace, alias, blob: None },
         None,
         &import_params,
@@ -1097,7 +1098,7 @@ pub fn import_3des_key(
         TRIPLE_DES_KEY,
     )?;
 
-    check_key_authorizations(&key_metadata.authorizations, &import_params, KeyOrigin::IMPORTED);
+    check_key_authorizations(sl, &key_metadata.authorizations, &import_params, KeyOrigin::IMPORTED);
 
     // Check below auths explicitly, they might not be addd in import parameters.
     assert!(check_key_param(
@@ -1132,7 +1133,7 @@ pub fn import_3des_key(
 
 /// Import sample HMAC key and validate its key parameters.
 pub fn import_hmac_key(
-    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    sl: &SecLevel,
     domain: Domain,
     nspace: i64,
     alias: Option<String>,
@@ -1149,7 +1150,7 @@ pub fn import_hmac_key(
         .digest(Digest::SHA_2_256)
         .min_mac_length(256);
 
-    let key_metadata = sec_level.importKey(
+    let key_metadata = sl.binder.importKey(
         &KeyDescriptor { domain, nspace, alias, blob: None },
         None,
         &import_params,
@@ -1157,7 +1158,7 @@ pub fn import_hmac_key(
         HMAC_KEY,
     )?;
 
-    check_key_authorizations(&key_metadata.authorizations, &import_params, KeyOrigin::IMPORTED);
+    check_key_authorizations(sl, &key_metadata.authorizations, &import_params, KeyOrigin::IMPORTED);
 
     // Check below auths explicitly, they might not be addd in import parameters.
     assert!(check_key_param(
@@ -1182,7 +1183,7 @@ pub fn import_hmac_key(
 
 /// Imports RSA encryption key with WRAP_KEY purpose.
 pub fn import_wrapping_key(
-    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    sl: &SecLevel,
     wrapping_key_data: &[u8],
     wrapping_key_alias: Option<String>,
 ) -> binder::Result<KeyMetadata> {
@@ -1199,7 +1200,7 @@ pub fn import_wrapping_key(
         .cert_not_before(0)
         .cert_not_after(253402300799000);
 
-    sec_level.importKey(
+    sl.binder.importKey(
         &KeyDescriptor { domain: Domain::APP, nspace: -1, alias: wrapping_key_alias, blob: None },
         None,
         &wrapping_key_params,
@@ -1210,7 +1211,7 @@ pub fn import_wrapping_key(
 
 /// Import wrapped key using given wrapping key.
 pub fn import_wrapped_key(
-    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    sl: &SecLevel,
     alias: Option<String>,
     wrapping_key_metadata: &KeyMetadata,
     wrapped_key: Option<Vec<u8>>,
@@ -1223,7 +1224,7 @@ pub fn import_wrapped_key(
         authenticatorId: 0,
     }];
 
-    let key_metadata = sec_level.importWrappedKey(
+    let key_metadata = sl.binder.importWrappedKey(
         &KeyDescriptor { domain: Domain::APP, nspace: -1, alias, blob: wrapped_key },
         &wrapping_key_metadata.key,
         None,
@@ -1236,14 +1237,14 @@ pub fn import_wrapped_key(
 
 /// Import wrapping key and then import wrapped key using wrapping key.
 pub fn import_wrapping_key_and_wrapped_key(
-    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    sl: &SecLevel,
     domain: Domain,
     nspace: i64,
     alias: Option<String>,
     wrapping_key_alias: Option<String>,
     wrapping_key_params: AuthSetBuilder,
 ) -> binder::Result<KeyMetadata> {
-    let wrapping_key_metadata = sec_level.importKey(
+    let wrapping_key_metadata = sl.binder.importKey(
         &KeyDescriptor { domain, nspace, alias: wrapping_key_alias, blob: None },
         None,
         &wrapping_key_params,
@@ -1251,12 +1252,12 @@ pub fn import_wrapping_key_and_wrapped_key(
         WRAPPING_KEY,
     )?;
 
-    import_wrapped_key(sec_level, alias, &wrapping_key_metadata, Some(WRAPPED_KEY.to_vec()))
+    import_wrapped_key(sl, alias, &wrapping_key_metadata, Some(WRAPPED_KEY.to_vec()))
 }
 
 /// Import given key material as AES-256-GCM-NONE transport key.
 pub fn import_transport_key(
-    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    sl: &SecLevel,
     transport_key_alias: Option<String>,
     transport_key: &[u8],
 ) -> binder::Result<KeyMetadata> {
@@ -1271,7 +1272,7 @@ pub fn import_transport_key(
         .purpose(KeyPurpose::ENCRYPT)
         .purpose(KeyPurpose::DECRYPT);
 
-    sec_level.importKey(
+    sl.binder.importKey(
         &KeyDescriptor { domain: Domain::APP, nspace: -1, alias: transport_key_alias, blob: None },
         None,
         &transport_key_params,
@@ -1282,7 +1283,7 @@ pub fn import_transport_key(
 
 /// Generate EC key with purpose AGREE_KEY.
 pub fn generate_ec_agree_key(
-    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    sl: &SecLevel,
     ec_curve: EcCurve,
     digest: Digest,
     domain: Domain,
@@ -1296,7 +1297,7 @@ pub fn generate_ec_agree_key(
         .digest(digest)
         .ec_curve(ec_curve);
 
-    match sec_level.generateKey(
+    match sl.binder.generateKey(
         &KeyDescriptor { domain, nspace, alias, blob: None },
         None,
         &gen_params,
@@ -1310,6 +1311,7 @@ pub fn generate_ec_agree_key(
             }
 
             check_key_authorizations(
+                sl,
                 &key_metadata.authorizations,
                 &gen_params,
                 KeyOrigin::GENERATED,
@@ -1322,7 +1324,7 @@ pub fn generate_ec_agree_key(
 
 /// Helper method to import AES keys `total_count` of times.
 pub fn import_aes_keys(
-    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    sl: &SecLevel,
     alias_prefix: String,
     total_count: Range<i32>,
 ) -> binder::Result<HashSet<String>> {
@@ -1334,7 +1336,7 @@ pub fn import_aes_keys(
         write!(alias, "{}_{}", alias_prefix, count).unwrap();
         imported_key_aliases.insert(alias.clone());
 
-        import_aes_key(sec_level, Domain::APP, -1, Some(alias))?;
+        import_aes_key(sl, Domain::APP, -1, Some(alias))?;
     }
 
     Ok(imported_key_aliases)
@@ -1342,7 +1344,7 @@ pub fn import_aes_keys(
 
 /// Generate attested EC-P_256 key with device id attestation.
 pub fn generate_key_with_attest_id(
-    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    sl: &SecLevel,
     algorithm: Algorithm,
     alias: Option<String>,
     att_challenge: &[u8],
@@ -1405,7 +1407,7 @@ pub fn generate_key_with_attest_id(
         }
     }
 
-    sec_level.generateKey(
+    sl.binder.generateKey(
         &KeyDescriptor { domain: Domain::APP, nspace: -1, alias, blob: None },
         Some(attest_key),
         &ec_gen_params,
@@ -1416,11 +1418,11 @@ pub fn generate_key_with_attest_id(
 
 /// Generate Key and validate key characteristics.
 pub fn generate_key(
-    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    sl: &SecLevel,
     gen_params: &AuthSetBuilder,
     alias: &str,
 ) -> binder::Result<KeyMetadata> {
-    let key_metadata = sec_level.generateKey(
+    let key_metadata = sl.binder.generateKey(
         &KeyDescriptor {
             domain: Domain::APP,
             nspace: -1,
@@ -1474,19 +1476,19 @@ pub fn generate_key(
             assert!(!att_app_id.is_empty());
         }
     }
-    check_key_authorizations(&key_metadata.authorizations, gen_params, KeyOrigin::GENERATED);
+    check_key_authorizations(sl, &key_metadata.authorizations, gen_params, KeyOrigin::GENERATED);
 
     Ok(key_metadata)
 }
 
 /// Generate a key using given authorizations and create an operation using the generated key.
 pub fn create_key_and_operation(
-    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    sl: &SecLevel,
     gen_params: &AuthSetBuilder,
     op_params: &AuthSetBuilder,
     alias: &str,
 ) -> binder::Result<CreateOperationResponse> {
-    let key_metadata = generate_key(sec_level, gen_params, alias)?;
+    let key_metadata = generate_key(sl, gen_params, alias)?;
 
-    sec_level.createOperation(&key_metadata.key, op_params, false)
+    sl.binder.createOperation(&key_metadata.key, op_params, false)
 }

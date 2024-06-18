@@ -12,27 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use nix::unistd::{getuid, Gid, Uid};
-use rustutils::users::AID_USER_OFFSET;
-use std::thread;
-use std::thread::JoinHandle;
-
+use crate::keystore2_client_test_utils::{
+    create_signing_operation, execute_op_run_as_child, perform_sample_sign_operation,
+    BarrierReached, ForcedOp, TestOutcome,
+};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    Digest::Digest, ErrorCode::ErrorCode, KeyPurpose::KeyPurpose, SecurityLevel::SecurityLevel,
+    Digest::Digest, ErrorCode::ErrorCode, KeyPurpose::KeyPurpose,
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
     CreateOperationResponse::CreateOperationResponse, Domain::Domain,
     IKeystoreOperation::IKeystoreOperation, ResponseCode::ResponseCode,
 };
-
 use keystore2_test_utils::{
-    authorizations, get_keystore_service, key_generations, key_generations::Error, run_as,
+    authorizations, key_generations, key_generations::Error, run_as, SecLevel,
 };
-
-use crate::keystore2_client_test_utils::{
-    create_signing_operation, execute_op_run_as_child, perform_sample_sign_operation,
-    BarrierReached, ForcedOp, TestOutcome,
-};
+use nix::unistd::{getuid, Gid, Uid};
+use rustutils::users::AID_USER_OFFSET;
+use std::thread;
+use std::thread::JoinHandle;
 
 /// Create `max_ops` number child processes with the given context and perform an operation under each
 /// child process.
@@ -312,11 +309,10 @@ fn keystore2_ops_prune_test() {
     child_handle.recv();
 
     // Generate a key to use in below operations.
-    let keystore2 = get_keystore_service();
-    let sec_level = keystore2.getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+    let sl = SecLevel::tee();
     let alias = format!("ks_prune_op_test_key_{}", getuid());
     let key_metadata = key_generations::generate_ec_p256_signing_key(
-        &sec_level,
+        &sl,
         Domain::SELINUX,
         key_generations::SELINUX_SHELL_NAMESPACE,
         Some(alias),
@@ -327,7 +323,7 @@ fn keystore2_ops_prune_test() {
     // Create multiple operations in this process to trigger cannibalizing sibling operations.
     let mut ops: Vec<binder::Result<CreateOperationResponse>> = (0..MAX_OPS)
         .map(|_| {
-            sec_level.createOperation(
+            sl.binder.createOperation(
                 &key_metadata.key,
                 &authorizations::AuthSetBuilder::new()
                     .purpose(KeyPurpose::SIGN)
@@ -353,7 +349,7 @@ fn keystore2_ops_prune_test() {
         // Create a new operation, it should trigger to cannibalize one of their own sibling
         // operations.
         ops.push(
-            sec_level.createOperation(
+            sl.binder.createOperation(
                 &key_metadata.key,
                 &authorizations::AuthSetBuilder::new()
                     .purpose(KeyPurpose::SIGN)

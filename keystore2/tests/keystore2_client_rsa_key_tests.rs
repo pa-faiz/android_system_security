@@ -12,20 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::keystore2_client_test_utils::{delete_app_key, perform_sample_sign_operation, ForcedOp};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     Digest::Digest, ErrorCode::ErrorCode, KeyPurpose::KeyPurpose, PaddingMode::PaddingMode,
-    SecurityLevel::SecurityLevel,
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
     CreateOperationResponse::CreateOperationResponse, Domain::Domain,
-    IKeystoreSecurityLevel::IKeystoreSecurityLevel,
 };
-
-use keystore2_test_utils::{
-    authorizations, get_keystore_service, key_generations, key_generations::Error,
-};
-
-use crate::keystore2_client_test_utils::{delete_app_key, perform_sample_sign_operation, ForcedOp};
+use keystore2_test_utils::{authorizations, key_generations, key_generations::Error, SecLevel};
 
 /// This macro is used for creating signing key operation tests using digests and paddings
 /// for various key sizes.
@@ -77,7 +71,7 @@ macro_rules! test_rsa_encrypt_key_op {
 
 /// Generate a RSA key and create an operation using the generated key.
 fn create_rsa_key_and_operation(
-    sec_level: &binder::Strong<dyn IKeystoreSecurityLevel>,
+    sl: &SecLevel,
     domain: Domain,
     nspace: i64,
     alias: Option<String>,
@@ -86,7 +80,7 @@ fn create_rsa_key_and_operation(
     forced_op: ForcedOp,
 ) -> binder::Result<CreateOperationResponse> {
     let key_metadata =
-        key_generations::generate_rsa_key(sec_level, domain, nspace, alias, key_params, None)?;
+        key_generations::generate_rsa_key(sl, domain, nspace, alias, key_params, None)?;
 
     let mut op_params = authorizations::AuthSetBuilder::new().purpose(op_purpose);
 
@@ -103,7 +97,7 @@ fn create_rsa_key_and_operation(
         op_params = op_params.block_mode(value)
     }
 
-    sec_level.createOperation(&key_metadata.key, &op_params, forced_op.0)
+    sl.binder.createOperation(&key_metadata.key, &op_params, forced_op.0)
 }
 
 /// Generate RSA signing key with given parameters and perform signing operation.
@@ -113,11 +107,10 @@ fn perform_rsa_sign_key_op_success(
     alias: &str,
     padding: PaddingMode,
 ) {
-    let keystore2 = get_keystore_service();
-    let sec_level = keystore2.getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+    let sl = SecLevel::tee();
 
     let op_response = create_rsa_key_and_operation(
-        &sec_level,
+        &sl,
         Domain::APP,
         -1,
         Some(alias.to_string()),
@@ -143,17 +136,16 @@ fn perform_rsa_sign_key_op_success(
         ))
     );
 
-    delete_app_key(&keystore2, alias).unwrap();
+    delete_app_key(&sl.keystore2, alias).unwrap();
 }
 
 /// Generate RSA signing key with given parameters and try to perform signing operation.
 /// Error `INCOMPATIBLE_DIGEST | UNKNOWN_ERROR` is expected while creating an opearation.
 fn perform_rsa_sign_key_op_failure(digest: Digest, alias: &str, padding: PaddingMode) {
-    let keystore2 = get_keystore_service();
-    let sec_level = keystore2.getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+    let sl = SecLevel::tee();
 
     let result = key_generations::map_ks_error(create_rsa_key_and_operation(
-        &sec_level,
+        &sl,
         Domain::APP,
         -1,
         Some(alias.to_string()),
@@ -176,7 +168,7 @@ fn perform_rsa_sign_key_op_failure(digest: Digest, alias: &str, padding: Padding
         e == Error::Km(ErrorCode::UNKNOWN_ERROR) || e == Error::Km(ErrorCode::INCOMPATIBLE_DIGEST)
     );
 
-    delete_app_key(&keystore2, alias).unwrap();
+    delete_app_key(&sl.keystore2, alias).unwrap();
 }
 
 /// Generate RSA encrypt/decrypt key with given parameters and perform decrypt operation.
@@ -187,11 +179,10 @@ fn create_rsa_encrypt_decrypt_key_op_success(
     padding: PaddingMode,
     mgf_digest: Option<Digest>,
 ) {
-    let keystore2 = get_keystore_service();
-    let sec_level = keystore2.getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+    let sl = SecLevel::tee();
 
     let result = create_rsa_key_and_operation(
-        &sec_level,
+        &sl,
         Domain::APP,
         -1,
         Some(alias.to_string()),
@@ -210,7 +201,7 @@ fn create_rsa_encrypt_decrypt_key_op_success(
 
     assert!(result.is_ok());
 
-    delete_app_key(&keystore2, alias).unwrap();
+    delete_app_key(&sl.keystore2, alias).unwrap();
 }
 
 // Below macros generate tests for generating RSA signing keys with -
@@ -1533,12 +1524,11 @@ test_rsa_encrypt_key_op!(
 /// `INCOMPATIBLE_DIGEST` error code.
 #[test]
 fn keystore2_rsa_generate_signing_key_padding_pss_fail() {
-    let keystore2 = get_keystore_service();
-    let sec_level = keystore2.getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+    let sl = SecLevel::tee();
 
     let alias = "ks_rsa_pss_none_key_op_test";
     let result = key_generations::map_ks_error(create_rsa_key_and_operation(
-        &sec_level,
+        &sl,
         Domain::APP,
         -1,
         Some(alias.to_string()),
@@ -1565,12 +1555,11 @@ fn keystore2_rsa_generate_signing_key_padding_pss_fail() {
 /// with an error code `INCOMPATIBLE_DIGEST`.
 #[test]
 fn keystore2_rsa_generate_key_with_oaep_padding_fail() {
-    let keystore2 = get_keystore_service();
-    let sec_level = keystore2.getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+    let sl = SecLevel::tee();
 
     let alias = "ks_rsa_key_oaep_padding_fail_test";
     let result = key_generations::map_ks_error(create_rsa_key_and_operation(
-        &sec_level,
+        &sl,
         Domain::APP,
         -1,
         Some(alias.to_string()),
@@ -1596,12 +1585,11 @@ fn keystore2_rsa_generate_key_with_oaep_padding_fail() {
 /// `UNSUPPORTED_PADDING_MODE`.
 #[test]
 fn keystore2_rsa_generate_keys() {
-    let keystore2 = get_keystore_service();
-    let sec_level = keystore2.getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+    let sl = SecLevel::tee();
 
     let alias = "ks_rsa_key_unsupport_padding_test";
     let result = key_generations::map_ks_error(create_rsa_key_and_operation(
-        &sec_level,
+        &sl,
         Domain::APP,
         -1,
         Some(alias.to_string()),
@@ -1625,12 +1613,11 @@ fn keystore2_rsa_generate_keys() {
 /// `INCOMPATIBLE_PURPOSE` is expected as the generated key doesn't support sign operation.
 #[test]
 fn keystore2_rsa_encrypt_key_op_invalid_purpose() {
-    let keystore2 = get_keystore_service();
-    let sec_level = keystore2.getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+    let sl = SecLevel::tee();
 
     let alias = "ks_rsa_test_key_1";
     let result = key_generations::map_ks_error(create_rsa_key_and_operation(
-        &sec_level,
+        &sl,
         Domain::APP,
         -1,
         Some(alias.to_string()),
@@ -1654,12 +1641,11 @@ fn keystore2_rsa_encrypt_key_op_invalid_purpose() {
 /// `INCOMPATIBLE_PURPOSE` is expected as the generated key doesn't support decrypt operation.
 #[test]
 fn keystore2_rsa_sign_key_op_invalid_purpose() {
-    let keystore2 = get_keystore_service();
-    let sec_level = keystore2.getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+    let sl = SecLevel::tee();
 
     let alias = "ks_rsa_test_key_2";
     let result = key_generations::map_ks_error(create_rsa_key_and_operation(
-        &sec_level,
+        &sl,
         Domain::APP,
         -1,
         Some(alias.to_string()),
@@ -1683,12 +1669,11 @@ fn keystore2_rsa_sign_key_op_invalid_purpose() {
 /// generated key, an error `UNSUPPORTED_PURPOSE` is expected as RSA doesn't support AGREE_KEY.
 #[test]
 fn keystore2_rsa_key_unsupported_purpose() {
-    let keystore2 = get_keystore_service();
-    let sec_level = keystore2.getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+    let sl = SecLevel::tee();
 
     let alias = "ks_rsa_key_test_3";
     let result = key_generations::map_ks_error(create_rsa_key_and_operation(
-        &sec_level,
+        &sl,
         Domain::APP,
         -1,
         Some(alias.to_string()),
@@ -1713,14 +1698,13 @@ fn keystore2_rsa_key_unsupported_purpose() {
 /// mode.
 #[test]
 fn keystore2_rsa_encrypt_key_unsupported_padding() {
-    let keystore2 = get_keystore_service();
-    let sec_level = keystore2.getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+    let sl = SecLevel::tee();
     let paddings = [PaddingMode::RSA_PKCS1_1_5_SIGN, PaddingMode::RSA_PSS];
 
     for padding in paddings {
         let alias = format!("ks_rsa_encrypt_key_unsupported_pad_test{}", padding.0);
         let result = key_generations::map_ks_error(create_rsa_key_and_operation(
-            &sec_level,
+            &sl,
             Domain::APP,
             -1,
             Some(alias.to_string()),
@@ -1746,14 +1730,13 @@ fn keystore2_rsa_encrypt_key_unsupported_padding() {
 /// unsupported padding mode.
 #[test]
 fn keystore2_rsa_signing_key_unsupported_padding() {
-    let keystore2 = get_keystore_service();
-    let sec_level = keystore2.getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+    let sl = SecLevel::tee();
     let paddings = [PaddingMode::RSA_PKCS1_1_5_ENCRYPT, PaddingMode::RSA_OAEP];
 
     for padding in paddings {
         let alias = format!("ks_rsa_sign_key_unsupported_pad_test_4_{}", padding.0);
         let result = key_generations::map_ks_error(create_rsa_key_and_operation(
-            &sec_level,
+            &sl,
             Domain::APP,
             -1,
             Some(alias.to_string()),
@@ -1779,12 +1762,11 @@ fn keystore2_rsa_signing_key_unsupported_padding() {
 /// with RSA key.
 #[test]
 fn keystore2_rsa_key_unsupported_op() {
-    let keystore2 = get_keystore_service();
-    let sec_level = keystore2.getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+    let sl = SecLevel::tee();
 
     let alias = "ks_rsa_key_test_5";
     let result = key_generations::map_ks_error(create_rsa_key_and_operation(
-        &sec_level,
+        &sl,
         Domain::APP,
         -1,
         Some(alias.to_string()),
@@ -1810,12 +1792,11 @@ fn keystore2_rsa_key_unsupported_op() {
 /// generated with decrypt purpose.
 #[test]
 fn keystore2_rsa_key_missing_purpose() {
-    let keystore2 = get_keystore_service();
-    let sec_level = keystore2.getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+    let sl = SecLevel::tee();
 
     let alias = "ks_rsa_key_test_6";
     let result = key_generations::map_ks_error(create_rsa_key_and_operation(
-        &sec_level,
+        &sl,
         Domain::APP,
         -1,
         Some(alias.to_string()),
@@ -1840,12 +1821,11 @@ fn keystore2_rsa_key_missing_purpose() {
 /// operation with generated key, unsupported digest error is expected.
 #[test]
 fn keystore2_rsa_gen_keys_with_oaep_paddings_without_digest() {
-    let keystore2 = get_keystore_service();
-    let sec_level = keystore2.getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+    let sl = SecLevel::tee();
 
     let alias = "ks_rsa_key_padding_fail";
     let result = key_generations::map_ks_error(create_rsa_key_and_operation(
-        &sec_level,
+        &sl,
         Domain::APP,
         -1,
         Some(alias.to_string()),
@@ -1869,12 +1849,11 @@ fn keystore2_rsa_gen_keys_with_oaep_paddings_without_digest() {
 /// Generate RSA keys with unsupported key size, an error `UNSUPPORTED_KEY_SIZE` is expected.
 #[test]
 fn keystore2_rsa_gen_keys_unsupported_size() {
-    let keystore2 = get_keystore_service();
-    let sec_level = keystore2.getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+    let sl = SecLevel::tee();
 
     let alias = "ks_rsa_key_padding_fail";
     let result = key_generations::map_ks_error(key_generations::generate_rsa_key(
-        &sec_level,
+        &sl,
         Domain::APP,
         -1,
         Some(alias.to_string()),
