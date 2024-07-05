@@ -44,8 +44,8 @@ use android_hardware_security_secureclock::aidl::android::hardware::security::se
 };
 use android_security_compat::aidl::android::security::compat::IKeystoreCompatService::IKeystoreCompatService;
 use anyhow::{Context, Result};
-use binder::get_declared_instances;
 use binder::FromIBinder;
+use binder::{get_declared_instances, is_declared};
 use lazy_static::lazy_static;
 use std::sync::{Arc, Mutex, RwLock};
 use std::{cell::RefCell, sync::Once};
@@ -165,7 +165,7 @@ lazy_static! {
         (
             Box::new(|uuid, blob| {
                 let km_dev = get_keymint_dev_by_uuid(uuid).map(|(dev, _)| dev)?;
-                let _wp = wd::watch_millis("In invalidate key closure: calling deleteKey", 500);
+                let _wp = wd::watch("In invalidate key closure: calling deleteKey");
                 map_km_error(km_dev.deleteKey(blob))
                     .context(ks_err!("Trying to invalidate key blob."))
             }),
@@ -306,7 +306,7 @@ fn connect_keymint(
         }
     };
 
-    let wp = wd::watch_millis("In connect_keymint: calling getHardwareInfo()", 500);
+    let wp = wd::watch("In connect_keymint: calling getHardwareInfo()");
     let mut hw_info =
         map_km_error(keymint.getHardwareInfo()).context(ks_err!("Failed to get hardware info."))?;
     drop(wp);
@@ -420,19 +420,20 @@ pub fn get_timestamp_service() -> Result<Strong<dyn ISecureClock>> {
 pub fn get_remotely_provisioned_component_name(security_level: &SecurityLevel) -> Result<String> {
     let remote_prov_descriptor: &str =
         <BpRemotelyProvisionedComponent as IRemotelyProvisionedComponent>::get_descriptor();
-    let remotely_prov_instances = get_declared_instances(remote_prov_descriptor).unwrap();
 
     match *security_level {
         SecurityLevel::TRUSTED_ENVIRONMENT => {
-            if remotely_prov_instances.iter().any(|instance| *instance == "default") {
-                Some(format!("{}/default", remote_prov_descriptor))
+            let instance = format!("{}/default", remote_prov_descriptor);
+            if is_declared(&instance)? {
+                Some(instance)
             } else {
                 None
             }
         }
         SecurityLevel::STRONGBOX => {
-            if remotely_prov_instances.iter().any(|instance| *instance == "strongbox") {
-                Some(format!("{}/strongbox", remote_prov_descriptor))
+            let instance = format!("{}/strongbox", remote_prov_descriptor);
+            if is_declared(&instance)? {
+                Some(instance)
             } else {
                 None
             }

@@ -24,6 +24,7 @@
 #include <remote_prov/remote_prov_utils.h>
 #include <sys/random.h>
 
+#include <future>
 #include <string>
 #include <vector>
 
@@ -77,6 +78,11 @@ void writeOutput(const std::string instance_name, const Array& csr) {
 }
 
 void getCsrForIRpc(const char* descriptor, const char* name, IRemotelyProvisionedComponent* irpc) {
+    // AVF RKP HAL is not always supported, so we need to check if it is supported before
+    // generating the CSR.
+    if (std::string(name) == "avf" && !isRemoteProvisioningSupported(irpc)) {
+        return;
+    }
     auto [request, errMsg] = getCsr(name, irpc, FLAGS_self_test);
     auto fullName = getFullServiceName(descriptor, name);
     if (!request) {
@@ -91,7 +97,13 @@ void getCsrForIRpc(const char* descriptor, const char* name, IRemotelyProvisione
 // for every IRemotelyProvisionedComponent.
 void getCsrForInstance(const char* name, void* /*context*/) {
     auto fullName = getFullServiceName(IRemotelyProvisionedComponent::descriptor, name);
-    AIBinder* rkpAiBinder = AServiceManager_getService(fullName.c_str());
+    std::future<AIBinder*> wait_for_service_func =
+        std::async(std::launch::async, AServiceManager_waitForService, fullName.c_str());
+    if (wait_for_service_func.wait_for(std::chrono::seconds(10)) == std::future_status::timeout) {
+        std::cerr << "Wait for service timed out after 10 seconds: " << fullName;
+        exit(-1);
+    }
+    AIBinder* rkpAiBinder = wait_for_service_func.get();
     ::ndk::SpAIBinder rkp_binder(rkpAiBinder);
     auto rkp_service = IRemotelyProvisionedComponent::fromBinder(rkp_binder);
     if (!rkp_service) {

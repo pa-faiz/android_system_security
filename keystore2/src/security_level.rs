@@ -20,7 +20,7 @@ use crate::audit_log::{
 };
 use crate::database::{BlobInfo, CertificateInfo, KeyIdGuard};
 use crate::error::{
-    self, map_km_error, map_or_log_err, wrapped_rkpd_error_to_ks_error, Error, ErrorCode,
+    self, into_logged_binder, map_km_error, wrapped_rkpd_error_to_ks_error, Error, ErrorCode,
 };
 use crate::globals::{
     get_remotely_provisioned_component_name, DB, ENFORCEMENTS, LEGACY_IMPORTER, SUPER_KEY,
@@ -99,7 +99,7 @@ impl KeystoreSecurityLevel {
                 hw_info,
                 km_uuid,
                 operation_db: OperationDb::new(),
-                rem_prov_state: RemProvState::new(security_level, km_uuid),
+                rem_prov_state: RemProvState::new(security_level),
                 id_rotation_state,
             },
             BinderFeatures { set_requesting_sid: true, ..BinderFeatures::default() },
@@ -110,6 +110,13 @@ impl KeystoreSecurityLevel {
     fn watch_millis(&self, id: &'static str, millis: u64) -> Option<wd::WatchPoint> {
         let sec_level = self.security_level;
         wd::watch_millis_with(id, millis, move || format!("SecurityLevel {:?}", sec_level))
+    }
+
+    fn watch(&self, id: &'static str) -> Option<wd::WatchPoint> {
+        let sec_level = self.security_level;
+        wd::watch_millis_with(id, wd::DEFAULT_TIMEOUT_MS, move || {
+            format!("SecurityLevel {:?}", sec_level)
+        })
     }
 
     fn store_new_key(
@@ -323,10 +330,8 @@ impl KeystoreSecurityLevel {
                 operation_parameters,
                 |blob| loop {
                     match map_km_error({
-                        let _wp = self.watch_millis(
-                            "In KeystoreSecurityLevel::create_operation: calling begin",
-                            500,
-                        );
+                        let _wp =
+                            self.watch("In KeystoreSecurityLevel::create_operation: calling begin");
                         self.keymint.begin(
                             purpose,
                             blob,
@@ -440,10 +445,8 @@ impl KeystoreSecurityLevel {
         // If there is an attestation challenge we need to get an application id.
         if params.iter().any(|kp| kp.tag == Tag::ATTESTATION_CHALLENGE) {
             let aaid = {
-                let _wp = self.watch_millis(
-                    "In KeystoreSecurityLevel::add_required_parameters calling: get_aaid",
-                    500,
-                );
+                let _wp = self
+                    .watch("In KeystoreSecurityLevel::add_required_parameters calling: get_aaid");
                 keystore2_aaid::get_aaid(uid)
                     .map_err(|e| anyhow!(ks_err!("get_aaid returned status {}.", e)))
             }?;
@@ -675,8 +678,7 @@ impl KeystoreSecurityLevel {
 
         let km_dev = &self.keymint;
         let creation_result = map_km_error({
-            let _wp =
-                self.watch_millis("In KeystoreSecurityLevel::import_key: calling importKey.", 500);
+            let _wp = self.watch("In KeystoreSecurityLevel::import_key: calling importKey.");
             km_dev.importKey(&params, format, key_data, None /* attestKey */)
         })
         .context(ks_err!("Trying to call importKey"))?;
@@ -789,9 +791,8 @@ impl KeystoreSecurityLevel {
                 wrapping_blob_metadata.km_uuid().copied(),
                 &[],
                 |wrapping_blob| {
-                    let _wp = self.watch_millis(
+                    let _wp = self.watch(
                         "In KeystoreSecurityLevel::import_wrapped_key: calling importWrappedKey.",
-                        500,
                     );
                     let creation_result = map_km_error(self.keymint.importWrappedKey(
                         wrapped_data,
@@ -897,7 +898,7 @@ impl KeystoreSecurityLevel {
             params,
             f,
             |upgraded_blob| {
-                let _wp = wd::watch_millis("Calling store_rkpd_attestation_key()", 500);
+                let _wp = wd::watch("Calling store_rkpd_attestation_key()");
                 if let Err(e) = store_rkpd_attestation_key(&rpc_name, key_blob, upgraded_blob) {
                     Err(wrapped_rkpd_error_to_ks_error(&e)).context(format!("{e:?}"))
                 } else {
@@ -928,13 +929,10 @@ impl KeystoreSecurityLevel {
 
         let km_dev = &self.keymint;
         let res = {
-            let _wp = self.watch_millis(
-                concat!(
-                    "In IKeystoreSecurityLevel::convert_storage_key_to_ephemeral: ",
-                    "calling convertStorageKeyToEphemeral (1)"
-                ),
-                500,
-            );
+            let _wp = self.watch(concat!(
+                "In IKeystoreSecurityLevel::convert_storage_key_to_ephemeral: ",
+                "calling convertStorageKeyToEphemeral (1)"
+            ));
             map_km_error(km_dev.convertStorageKeyToEphemeral(key_blob))
         };
         match res {
@@ -943,17 +941,13 @@ impl KeystoreSecurityLevel {
             }
             Err(error::Error::Km(ErrorCode::KEY_REQUIRES_UPGRADE)) => {
                 let upgraded_blob = {
-                    let _wp = self.watch_millis(
-                        "In convert_storage_key_to_ephemeral: calling upgradeKey",
-                        500,
-                    );
+                    let _wp = self.watch("In convert_storage_key_to_ephemeral: calling upgradeKey");
                     map_km_error(km_dev.upgradeKey(key_blob, &[]))
                 }
                 .context(ks_err!("Failed to upgrade key blob."))?;
                 let ephemeral_key = {
-                    let _wp = self.watch_millis(
+                    let _wp = self.watch(
                         "In convert_storage_key_to_ephemeral: calling convertStorageKeyToEphemeral (2)",
-                        500,
                     );
                     map_km_error(km_dev.convertStorageKeyToEphemeral(&upgraded_blob))
                 }
@@ -986,8 +980,7 @@ impl KeystoreSecurityLevel {
 
         let km_dev = &self.keymint;
         {
-            let _wp =
-                self.watch_millis("In KeystoreSecuritylevel::delete_key: calling deleteKey", 500);
+            let _wp = self.watch("In KeystoreSecuritylevel::delete_key: calling deleteKey");
             map_km_error(km_dev.deleteKey(key_blob)).context(ks_err!("keymint device deleteKey"))
         }
     }
@@ -1002,8 +995,8 @@ impl IKeystoreSecurityLevel for KeystoreSecurityLevel {
         operation_parameters: &[KeyParameter],
         forced: bool,
     ) -> binder::Result<CreateOperationResponse> {
-        let _wp = self.watch_millis("IKeystoreSecurityLevel::createOperation", 500);
-        map_or_log_err(self.create_operation(key, operation_parameters, forced), Ok)
+        let _wp = self.watch("IKeystoreSecurityLevel::createOperation");
+        self.create_operation(key, operation_parameters, forced).map_err(into_logged_binder)
     }
     fn generateKey(
         &self,
@@ -1019,7 +1012,7 @@ impl IKeystoreSecurityLevel for KeystoreSecurityLevel {
         let result = self.generate_key(key, attestation_key, params, flags, entropy);
         log_key_creation_event_stats(self.security_level, params, &result);
         log_key_generated(key, ThreadState::get_calling_uid(), result.is_ok());
-        map_or_log_err(result, Ok)
+        result.map_err(into_logged_binder)
     }
     fn importKey(
         &self,
@@ -1029,11 +1022,11 @@ impl IKeystoreSecurityLevel for KeystoreSecurityLevel {
         flags: i32,
         key_data: &[u8],
     ) -> binder::Result<KeyMetadata> {
-        let _wp = self.watch_millis("IKeystoreSecurityLevel::importKey", 500);
+        let _wp = self.watch("IKeystoreSecurityLevel::importKey");
         let result = self.import_key(key, attestation_key, params, flags, key_data);
         log_key_creation_event_stats(self.security_level, params, &result);
         log_key_imported(key, ThreadState::get_calling_uid(), result.is_ok());
-        map_or_log_err(result, Ok)
+        result.map_err(into_logged_binder)
     }
     fn importWrappedKey(
         &self,
@@ -1043,25 +1036,25 @@ impl IKeystoreSecurityLevel for KeystoreSecurityLevel {
         params: &[KeyParameter],
         authenticators: &[AuthenticatorSpec],
     ) -> binder::Result<KeyMetadata> {
-        let _wp = self.watch_millis("IKeystoreSecurityLevel::importWrappedKey", 500);
+        let _wp = self.watch("IKeystoreSecurityLevel::importWrappedKey");
         let result =
             self.import_wrapped_key(key, wrapping_key, masking_key, params, authenticators);
         log_key_creation_event_stats(self.security_level, params, &result);
         log_key_imported(key, ThreadState::get_calling_uid(), result.is_ok());
-        map_or_log_err(result, Ok)
+        result.map_err(into_logged_binder)
     }
     fn convertStorageKeyToEphemeral(
         &self,
         storage_key: &KeyDescriptor,
     ) -> binder::Result<EphemeralStorageKeyResponse> {
-        let _wp = self.watch_millis("IKeystoreSecurityLevel::convertStorageKeyToEphemeral", 500);
-        map_or_log_err(self.convert_storage_key_to_ephemeral(storage_key), Ok)
+        let _wp = self.watch("IKeystoreSecurityLevel::convertStorageKeyToEphemeral");
+        self.convert_storage_key_to_ephemeral(storage_key).map_err(into_logged_binder)
     }
     fn deleteKey(&self, key: &KeyDescriptor) -> binder::Result<()> {
-        let _wp = self.watch_millis("IKeystoreSecurityLevel::deleteKey", 500);
+        let _wp = self.watch("IKeystoreSecurityLevel::deleteKey");
         let result = self.delete_key(key);
         log_key_deleted(key, ThreadState::get_calling_uid(), result.is_ok());
-        map_or_log_err(result, Ok)
+        result.map_err(into_logged_binder)
     }
 }
 
@@ -1130,7 +1123,7 @@ mod tests {
             |new_blob| {
                 // This handler is only executed if a key upgrade was performed.
                 key_upgraded = true;
-                let _wp = wd::watch_millis("Calling store_rkpd_attestation_key()", 500);
+                let _wp = wd::watch("Calling store_rkpd_attestation_key()");
                 store_rkpd_attestation_key(&rpc_name, &key.keyBlob, new_blob).unwrap();
                 Ok(())
             },

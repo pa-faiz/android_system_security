@@ -15,8 +15,8 @@
 //! This module implements IKeystoreMaintenance AIDL interface.
 
 use crate::database::{KeyEntryLoadBits, KeyType};
+use crate::error::into_logged_binder;
 use crate::error::map_km_error;
-use crate::error::map_or_log_err;
 use crate::error::Error;
 use crate::globals::get_keymint_device;
 use crate::globals::{DB, LEGACY_IMPORTER, SUPER_KEY};
@@ -302,14 +302,15 @@ impl IKeystoreMaintenance for Maintenance {
             user_id,
             password.is_some()
         );
-        let _wp = wd::watch_millis("IKeystoreMaintenance::onUserPasswordChanged", 500);
-        map_or_log_err(Self::on_user_password_changed(user_id, password.map(|pw| pw.into())), Ok)
+        let _wp = wd::watch("IKeystoreMaintenance::onUserPasswordChanged");
+        Self::on_user_password_changed(user_id, password.map(|pw| pw.into()))
+            .map_err(into_logged_binder)
     }
 
     fn onUserAdded(&self, user_id: i32) -> BinderResult<()> {
         log::info!("onUserAdded(user={user_id})");
-        let _wp = wd::watch_millis("IKeystoreMaintenance::onUserAdded", 500);
-        map_or_log_err(self.add_or_remove_user(user_id), Ok)
+        let _wp = wd::watch("IKeystoreMaintenance::onUserAdded");
+        self.add_or_remove_user(user_id).map_err(into_logged_binder)
     }
 
     fn initUserSuperKeys(
@@ -319,32 +320,33 @@ impl IKeystoreMaintenance for Maintenance {
         allow_existing: bool,
     ) -> BinderResult<()> {
         log::info!("initUserSuperKeys(user={user_id}, allow_existing={allow_existing})");
-        let _wp = wd::watch_millis("IKeystoreMaintenance::initUserSuperKeys", 500);
-        map_or_log_err(self.init_user_super_keys(user_id, password.into(), allow_existing), Ok)
+        let _wp = wd::watch("IKeystoreMaintenance::initUserSuperKeys");
+        self.init_user_super_keys(user_id, password.into(), allow_existing)
+            .map_err(into_logged_binder)
     }
 
     fn onUserRemoved(&self, user_id: i32) -> BinderResult<()> {
         log::info!("onUserRemoved(user={user_id})");
-        let _wp = wd::watch_millis("IKeystoreMaintenance::onUserRemoved", 500);
-        map_or_log_err(self.add_or_remove_user(user_id), Ok)
+        let _wp = wd::watch("IKeystoreMaintenance::onUserRemoved");
+        self.add_or_remove_user(user_id).map_err(into_logged_binder)
     }
 
     fn onUserLskfRemoved(&self, user_id: i32) -> BinderResult<()> {
         log::info!("onUserLskfRemoved(user={user_id})");
-        let _wp = wd::watch_millis("IKeystoreMaintenance::onUserLskfRemoved", 500);
-        map_or_log_err(Self::on_user_lskf_removed(user_id), Ok)
+        let _wp = wd::watch("IKeystoreMaintenance::onUserLskfRemoved");
+        Self::on_user_lskf_removed(user_id).map_err(into_logged_binder)
     }
 
     fn clearNamespace(&self, domain: Domain, nspace: i64) -> BinderResult<()> {
         log::info!("clearNamespace({domain:?}, nspace={nspace})");
-        let _wp = wd::watch_millis("IKeystoreMaintenance::clearNamespace", 500);
-        map_or_log_err(self.clear_namespace(domain, nspace), Ok)
+        let _wp = wd::watch("IKeystoreMaintenance::clearNamespace");
+        self.clear_namespace(domain, nspace).map_err(into_logged_binder)
     }
 
     fn earlyBootEnded(&self) -> BinderResult<()> {
         log::info!("earlyBootEnded()");
-        let _wp = wd::watch_millis("IKeystoreMaintenance::earlyBootEnded", 500);
-        map_or_log_err(Self::early_boot_ended(), Ok)
+        let _wp = wd::watch("IKeystoreMaintenance::earlyBootEnded");
+        Self::early_boot_ended().map_err(into_logged_binder)
     }
 
     fn migrateKeyNamespace(
@@ -353,14 +355,14 @@ impl IKeystoreMaintenance for Maintenance {
         destination: &KeyDescriptor,
     ) -> BinderResult<()> {
         log::info!("migrateKeyNamespace(src={source:?}, dest={destination:?})");
-        let _wp = wd::watch_millis("IKeystoreMaintenance::migrateKeyNamespace", 500);
-        map_or_log_err(Self::migrate_key_namespace(source, destination), Ok)
+        let _wp = wd::watch("IKeystoreMaintenance::migrateKeyNamespace");
+        Self::migrate_key_namespace(source, destination).map_err(into_logged_binder)
     }
 
     fn deleteAllKeys(&self) -> BinderResult<()> {
         log::warn!("deleteAllKeys()");
-        let _wp = wd::watch_millis("IKeystoreMaintenance::deleteAllKeys", 500);
-        map_or_log_err(Self::delete_all_keys(), Ok)
+        let _wp = wd::watch("IKeystoreMaintenance::deleteAllKeys");
+        Self::delete_all_keys().map_err(into_logged_binder)
     }
 
     fn getAppUidsAffectedBySid(
@@ -369,7 +371,7 @@ impl IKeystoreMaintenance for Maintenance {
         secure_user_id: i64,
     ) -> BinderResult<std::vec::Vec<i64>> {
         log::info!("getAppUidsAffectedBySid(secure_user_id={secure_user_id:?})");
-        let _wp = wd::watch_millis("IKeystoreMaintenance::getAppUidsAffectedBySid", 500);
-        map_or_log_err(Self::get_app_uids_affected_by_sid(user_id, secure_user_id), Ok)
+        let _wp = wd::watch("IKeystoreMaintenance::getAppUidsAffectedBySid");
+        Self::get_app_uids_affected_by_sid(user_id, secure_user_id).map_err(into_logged_binder)
     }
 }

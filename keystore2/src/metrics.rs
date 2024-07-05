@@ -14,7 +14,7 @@
 
 //! This module implements the IKeystoreMetrics AIDL interface, which exposes the API method for the
 //! proxy in the system server to pull the aggregated metrics in keystore.
-use crate::error::map_or_log_err;
+use crate::error::into_logged_binder;
 use crate::ks_err;
 use crate::metrics_store::METRICS_STORE;
 use crate::permission::KeystorePerm;
@@ -51,7 +51,7 @@ impl Interface for Metrics {}
 
 impl IKeystoreMetrics for Metrics {
     fn pullMetrics(&self, atom_id: AtomID) -> BinderResult<Vec<KeystoreAtom>> {
-        let _wp = wd::watch_millis("IKeystoreMetrics::pullMetrics", 500);
-        map_or_log_err(self.pull_metrics(atom_id), Ok)
+        let _wp = wd::watch("IKeystoreMetrics::pullMetrics");
+        self.pull_metrics(atom_id).map_err(into_logged_binder)
     }
 }

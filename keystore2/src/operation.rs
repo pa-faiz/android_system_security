@@ -127,7 +127,7 @@
 
 use crate::enforcements::AuthInfo;
 use crate::error::{
-    error_to_serialized_error, map_err_with, map_km_error, map_or_log_err, Error, ErrorCode,
+    error_to_serialized_error, into_binder, into_logged_binder, map_km_error, Error, ErrorCode,
     ResponseCode, SerializedError,
 };
 use crate::ks_err;
@@ -286,7 +286,7 @@ impl Operation {
         }
         *locked_outcome = Outcome::Pruned;
 
-        let _wp = wd::watch_millis("In Operation::prune: calling abort()", 500);
+        let _wp = wd::watch("In Operation::prune: calling abort()");
 
         // We abort the operation. If there was an error we log it but ignore it.
         if let Err(e) = map_km_error(self.km_op.abort()) {
@@ -362,7 +362,7 @@ impl Operation {
             .context(ks_err!("Trying to get auth tokens."))?;
 
         self.update_outcome(&mut outcome, {
-            let _wp = wd::watch_millis("Operation::update_aad: calling updateAad", 500);
+            let _wp = wd::watch("Operation::update_aad: calling updateAad");
             map_km_error(self.km_op.updateAad(aad_input, hat.as_ref(), tst.as_ref()))
         })
         .context(ks_err!("Update failed."))?;
@@ -386,7 +386,7 @@ impl Operation {
 
         let output = self
             .update_outcome(&mut outcome, {
-                let _wp = wd::watch_millis("Operation::update: calling update", 500);
+                let _wp = wd::watch("Operation::update: calling update");
                 map_km_error(self.km_op.update(input, hat.as_ref(), tst.as_ref()))
             })
             .context(ks_err!("Update failed."))?;
@@ -416,7 +416,7 @@ impl Operation {
 
         let output = self
             .update_outcome(&mut outcome, {
-                let _wp = wd::watch_millis("Operation::finish: calling finish", 500);
+                let _wp = wd::watch("Operation::finish: calling finish");
                 map_km_error(self.km_op.finish(
                     input,
                     signature,
@@ -447,7 +447,7 @@ impl Operation {
         *locked_outcome = outcome;
 
         {
-            let _wp = wd::watch_millis("Operation::abort: calling abort", 500);
+            let _wp = wd::watch("Operation::abort: calling abort");
             map_km_error(self.km_op.abort()).context(ks_err!("KeyMint::abort failed."))
         }
     }
@@ -821,59 +821,50 @@ impl binder::Interface for KeystoreOperation {}
 
 impl IKeystoreOperation for KeystoreOperation {
     fn updateAad(&self, aad_input: &[u8]) -> binder::Result<()> {
-        let _wp = wd::watch_millis("IKeystoreOperation::updateAad", 500);
-        map_or_log_err(
-            self.with_locked_operation(
-                |op| op.update_aad(aad_input).context(ks_err!("KeystoreOperation::updateAad")),
-                false,
-            ),
-            Ok,
+        let _wp = wd::watch("IKeystoreOperation::updateAad");
+        self.with_locked_operation(
+            |op| op.update_aad(aad_input).context(ks_err!("KeystoreOperation::updateAad")),
+            false,
         )
+        .map_err(into_logged_binder)
     }
 
     fn update(&self, input: &[u8]) -> binder::Result<Option<Vec<u8>>> {
-        let _wp = wd::watch_millis("IKeystoreOperation::update", 500);
-        map_or_log_err(
-            self.with_locked_operation(
-                |op| op.update(input).context(ks_err!("KeystoreOperation::update")),
-                false,
-            ),
-            Ok,
+        let _wp = wd::watch("IKeystoreOperation::update");
+        self.with_locked_operation(
+            |op| op.update(input).context(ks_err!("KeystoreOperation::update")),
+            false,
         )
+        .map_err(into_logged_binder)
     }
     fn finish(
         &self,
         input: Option<&[u8]>,
         signature: Option<&[u8]>,
     ) -> binder::Result<Option<Vec<u8>>> {
-        let _wp = wd::watch_millis("IKeystoreOperation::finish", 500);
-        map_or_log_err(
-            self.with_locked_operation(
-                |op| op.finish(input, signature).context(ks_err!("KeystoreOperation::finish")),
-                true,
-            ),
-            Ok,
+        let _wp = wd::watch("IKeystoreOperation::finish");
+        self.with_locked_operation(
+            |op| op.finish(input, signature).context(ks_err!("KeystoreOperation::finish")),
+            true,
         )
+        .map_err(into_logged_binder)
     }
 
     fn abort(&self) -> binder::Result<()> {
-        let _wp = wd::watch_millis("IKeystoreOperation::abort", 500);
-        map_err_with(
-            self.with_locked_operation(
-                |op| op.abort(Outcome::Abort).context(ks_err!("KeystoreOperation::abort")),
-                true,
-            ),
-            |e| {
-                match e.root_cause().downcast_ref::<Error>() {
-                    // Calling abort on expired operations is something very common.
-                    // There is no reason to clutter the log with it. It is never the cause
-                    // for a true problem.
-                    Some(Error::Km(ErrorCode::INVALID_OPERATION_HANDLE)) => {}
-                    _ => log::error!("{:?}", e),
-                };
-                e
-            },
-            Ok,
-        )
+        let _wp = wd::watch("IKeystoreOperation::abort");
+        let result = self.with_locked_operation(
+            |op| op.abort(Outcome::Abort).context(ks_err!("KeystoreOperation::abort")),
+            true,
+        );
+        result.map_err(|e| {
+            match e.root_cause().downcast_ref::<Error>() {
+                // Calling abort on expired operations is something very common.
+                // There is no reason to clutter the log with it. It is never the cause
+                // for a true problem.
+                Some(Error::Km(ErrorCode::INVALID_OPERATION_HANDLE)) => {}
+                _ => log::error!("{:?}", e),
+            };
+            into_binder(e)
+        })
     }
 }
