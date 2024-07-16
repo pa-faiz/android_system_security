@@ -24,7 +24,7 @@ use android_system_keystore2::aidl::android::system::keystore2::{
     IKeystoreSecurityLevel::IKeystoreSecurityLevel,
 };
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    ErrorCode::ErrorCode, SecurityLevel::SecurityLevel,
+    ErrorCode::ErrorCode, IKeyMintDevice::IKeyMintDevice, SecurityLevel::SecurityLevel,
 };
 use android_security_authorization::aidl::android::security::authorization::IKeystoreAuthorization::IKeystoreAuthorization;
 
@@ -175,5 +175,22 @@ impl SecLevel {
     /// Indicate whether this security level is a Keymaster implementation (not KeyMint).
     pub fn is_keymaster(&self) -> bool {
         !self.is_keymint()
+    }
+
+    /// Get KeyMint version.
+    /// Returns 0 if the underlying device is Keymaster not KeyMint.
+    pub fn get_keymint_version(&self) -> i32 {
+        let instance = match self.level {
+            SecurityLevel::TRUSTED_ENVIRONMENT => "default",
+            SecurityLevel::STRONGBOX => "strongbox",
+            l => panic!("unexpected level {l:?}"),
+        };
+        let name = format!("android.hardware.security.keymint.IKeyMintDevice/{instance}");
+        if binder::is_declared(&name).expect("Could not check for declared keymint interface") {
+            let km: binder::Strong<dyn IKeyMintDevice> = binder::get_interface(&name).unwrap();
+            km.getInterfaceVersion().unwrap()
+        } else {
+            0
+        }
     }
 }

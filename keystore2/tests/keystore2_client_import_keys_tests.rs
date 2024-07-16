@@ -247,8 +247,8 @@ fn keystore2_rsa_import_key_fails_with_public_exponent_param_mismatch_error() {
 }
 
 /// Try to import a key with multiple purposes. Test should fail to import a key with
-/// `INCOMPATIBLE_PURPOSE` error code. If the backend is `keymaster` then `importKey` shall be
-/// successful.
+/// `INCOMPATIBLE_PURPOSE` error code. If the backend is `keymaster` or KeyMint-version-1 then
+/// `importKey` shall be successful.
 #[test]
 fn keystore2_rsa_import_key_with_multipurpose_fails_incompt_purpose_error() {
     let sl = SecLevel::tee();
@@ -276,8 +276,14 @@ fn keystore2_rsa_import_key_with_multipurpose_fails_incompt_purpose_error() {
     ));
 
     if sl.is_keymint() {
-        assert!(result.is_err());
-        assert_eq!(Error::Km(ErrorCode::INCOMPATIBLE_PURPOSE), result.unwrap_err());
+        if sl.get_keymint_version() >= 2 {
+            // The KeyMint v1 spec required that KeyPurpose::ATTEST_KEY not be combined
+            // with other key purposes.  However, this was not checked at the time
+            // so we can only be strict about checking this for implementations of KeyMint
+            // version 2 and above.
+            assert!(result.is_err());
+            assert_eq!(Error::Km(ErrorCode::INCOMPATIBLE_PURPOSE), result.unwrap_err());
+        }
     } else {
         assert!(result.is_ok());
     }

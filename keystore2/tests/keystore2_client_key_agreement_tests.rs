@@ -112,7 +112,7 @@ test_ec_key_agree!(test_ec_p256_key_agreement, EcCurve::P_256);
 test_ec_key_agree!(test_ec_p384_key_agreement, EcCurve::P_384);
 test_ec_key_agree!(test_ec_p521_key_agreement, EcCurve::P_521);
 
-/// Generate two EC keys with curve `CURVE_25519` from KeyMint and OpeanSSL.
+/// Generate two EC keys with curve `CURVE_25519` from KeyMint and OpenSSL.
 /// Perform local ECDH between them and verify that the derived secrets are the same.
 #[test]
 fn keystore2_ec_25519_agree_key_success() {

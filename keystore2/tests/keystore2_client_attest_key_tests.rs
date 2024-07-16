@@ -174,6 +174,13 @@ fn keystore2_attest_rsa_signing_key_with_ec_25519_key_success() {
     skip_test_if_no_app_attest_key_feature!();
 
     let sl = SecLevel::tee();
+    if sl.get_keymint_version() < 2 {
+        // Curve 25519 was included in version 2 of the KeyMint interface.
+        // For device with KeyMint-V1 or Keymaster in backend, emulated Ed25519 key can't attest
+        // to a "real" RSA key.
+        return;
+    }
+
     let att_challenge: &[u8] = b"foo";
 
     // Create EcCurve::CURVE_25519 attestation key.
@@ -223,6 +230,13 @@ fn keystore2_attest_rsa_signing_key_with_ec_25519_key_success() {
 fn keystore2_generate_rsa_attest_key_with_multi_purpose_fail() {
     skip_test_if_no_app_attest_key_feature!();
     let sl = SecLevel::tee();
+    if sl.get_keymint_version() < 2 {
+        // The KeyMint v1 spec required that KeyPurpose::ATTEST_KEY not be combined
+        // with other key purposes.  However, this was not checked at the time
+        // so we can only be strict about checking this for implementations of KeyMint
+        // version 2 and above.
+        return;
+    }
 
     let digest = Digest::SHA_2_256;
     let padding = PaddingMode::RSA_PKCS1_1_5_SIGN;
@@ -264,6 +278,13 @@ fn keystore2_generate_rsa_attest_key_with_multi_purpose_fail() {
 fn keystore2_ec_attest_key_with_multi_purpose_fail() {
     skip_test_if_no_app_attest_key_feature!();
     let sl = SecLevel::tee();
+    if sl.get_keymint_version() < 2 {
+        // The KeyMint v1 spec required that KeyPurpose::ATTEST_KEY not be combined
+        // with other key purposes.  However, this was not checked at the time
+        // so we can only be strict about checking this for implementations of KeyMint
+        // version 2 and above.
+        return;
+    }
 
     let attest_key_alias = format!("ks_ec_attest_multipurpose_key_{}", getuid());
 
