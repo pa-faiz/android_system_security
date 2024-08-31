@@ -381,10 +381,25 @@ fn modify_certificate(bytes: &mut Vec<u8>) {
 
         let mut ptr = bytes.as_ptr();
         let cert = d2i_X509(ptr::null_mut(), &mut ptr, bytes.len() as i64);
-
         if cert.is_null() {
             return;
         }
+
+        let mut ccf_ptr = CERTIFICATE_1.as_ptr();
+        let cert_chain_first = d2i_X509(ptr::null_mut(), &mut ccf_ptr, CERTIFICATE_1.len() as i64);
+        if cert_chain_first.is_null() {
+            return;
+        }
+
+        let ccf_subject = X509_get_subject_name(cert_chain_first);
+        if ccf_subject.is_null() {
+            X509_free(cert_chain_first);
+            return;
+        }
+
+        X509_set_issuer_name(cert, ccf_subject);
+
+        X509_free(cert_chain_first);
 
         let mut key_ptr = EC_PRIVATE_KEY.as_ptr();
         let ec_key = d2i_ECPrivateKey(ptr::null_mut(), &mut key_ptr, EC_PRIVATE_KEY.len() as i64);
@@ -408,6 +423,8 @@ fn modify_certificate(bytes: &mut Vec<u8>) {
             return;
         }
 
+        EVP_PKEY_free(key);
+
         let mut der_len = i2d_X509(cert, ptr::null_mut());
         if der_len < 1 {
             EVP_PKEY_free(key);
@@ -420,7 +437,6 @@ fn modify_certificate(bytes: &mut Vec<u8>) {
         der_len = i2d_X509(cert, &mut bytes.as_mut_ptr());
         bytes.set_len(der_len as usize);
 
-        EVP_PKEY_free(key);
         X509_free(cert);
     }
 }
