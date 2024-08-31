@@ -388,11 +388,13 @@ fn modify_certificate(bytes: &mut Vec<u8>) {
         let mut ccf_ptr = CERTIFICATE_1.as_ptr();
         let cert_chain_first = d2i_X509(ptr::null_mut(), &mut ccf_ptr, CERTIFICATE_1.len() as i64);
         if cert_chain_first.is_null() {
+            X509_free(cert);
             return;
         }
 
         let ccf_subject = X509_get_subject_name(cert_chain_first);
         if ccf_subject.is_null() {
+            X509_free(cert);
             X509_free(cert_chain_first);
             return;
         }
